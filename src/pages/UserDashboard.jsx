@@ -133,11 +133,12 @@ export default function UserDashboard() {
   const tankFillY = 8 + (86 - tankFillHeight)
 
   return (
-    <div style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", display: 'flex', minHeight: '100vh', width: '100%', background: '#FBF6EE', color: '#1D2420' }}>
+    <div style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%', background: '#FBF6EE', color: '#1D2420' }}>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body, #root { width: 100%; margin: 0; padding: 0; background: #FBF6EE; display: block; text-align: left; border: none; }
 
+        .user-layout { display: flex; flex: 1; min-width: 0; }
         .user-sidebar { width: 230px; min-height: 100vh; background: #12211C; display: flex; flex-direction: column; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
         .user-main { flex: 1; min-width: 0; padding: 28px 32px 40px; overflow-y: auto; background: #FBF6EE; }
 
@@ -295,6 +296,35 @@ export default function UserDashboard() {
         }
       `}</style>
 
+      {/* ── MOBILE NAV ── */}
+      <div className="mobile-nav">
+        <div className="mobile-logo">
+          <div className="sidebar-logo-dot">💧</div>
+          SuHu
+        </div>
+        <button className="hamburger" onClick={() => setMobileSidebar(true)}>☰</button>
+      </div>
+
+      {/* Mobile menu */}
+      {mobileSidebar && (
+        <div className="mobile-menu open">
+          <button className="mobile-menu-close" onClick={() => setMobileSidebar(false)}>✕</button>
+          {NAV_MAIN.concat(NAV_ACCOUNT).map(item => (
+            <button key={item.id} className={`sidebar-item${activeTab === item.id ? ' active' : ''}`}
+              onClick={() => { setActiveTab(item.id); setMobileSidebar(false) }}>
+              <i className={`ti ${item.icon}`} aria-hidden="true" />
+              {item.label}
+            </button>
+          ))}
+          <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <button className="sidebar-item" onClick={() => navigate('/login')}>
+              <i className="ti ti-logout" aria-hidden="true" /> Log Keluar
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="user-layout">
       {/* ── SIDEBAR (DESKTOP) ── */}
       <aside className="user-sidebar">
         <div className="sidebar-logo" onClick={() => navigate('/')}>
@@ -335,34 +365,6 @@ export default function UserDashboard() {
           </div>
         </div>
       </aside>
-
-      {/* ── MOBILE NAV ── */}
-      <div className="mobile-nav">
-        <div className="mobile-logo">
-          <div className="sidebar-logo-dot">💧</div>
-          SuHu
-        </div>
-        <button className="hamburger" onClick={() => setMobileSidebar(true)}>☰</button>
-      </div>
-
-      {/* Mobile menu */}
-      {mobileSidebar && (
-        <div className="mobile-menu open">
-          <button className="mobile-menu-close" onClick={() => setMobileSidebar(false)}>✕</button>
-          {NAV_MAIN.concat(NAV_ACCOUNT).map(item => (
-            <button key={item.id} className={`sidebar-item${activeTab === item.id ? ' active' : ''}`}
-              onClick={() => { setActiveTab(item.id); setMobileSidebar(false) }}>
-              <i className={`ti ${item.icon}`} aria-hidden="true" />
-              {item.label}
-            </button>
-          ))}
-          <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-            <button className="sidebar-item" onClick={() => navigate('/login')}>
-              <i className="ti ti-logout" aria-hidden="true" /> Log Keluar
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* ── MAIN ── */}
       <main className="user-main">
@@ -746,6 +748,7 @@ export default function UserDashboard() {
         )}
 
       </main>
+      </div>
     </div>
   )
 }
