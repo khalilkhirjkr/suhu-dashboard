@@ -1,16 +1,22 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
 
-const LOG_DATA = [
-  { masa: '14:32', paras: 82, hujan: 'Ya', solar: 18.4, bateri: 76 },
-  { masa: '14:27', paras: 80, hujan: 'Ya', solar: 18.1, bateri: 75 },
-  { masa: '14:22', paras: 79, hujan: 'Rintik', solar: 17.8, bateri: 74 },
-  { masa: '14:17', paras: 79, hujan: 'Rintik', solar: 16.9, bateri: 73 },
-  { masa: '14:12', paras: 78, hujan: 'Tidak', solar: 16.5, bateri: 72 },
-  { masa: '14:07', paras: 78, hujan: 'Tidak', solar: 16.2, bateri: 71 },
-  { masa: '14:02', paras: 77, hujan: 'Tidak', solar: 15.8, bateri: 70 },
-  { masa: '13:57', paras: 77, hujan: 'Tidak', solar: 15.5, bateri: 70 },
-]
+const ONLINE_THRESHOLD_MIN = 15 // unit upload setiap 5 min — anggap offline lepas 3 pusingan terlepas
+
+function formatRelativeTime(iso) {
+  if (!iso) return 'tiada data'
+  const diffMin = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (diffMin < 1) return 'baru sahaja'
+  if (diffMin < 60) return `${diffMin} minit lalu`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr} jam lalu`
+  return `${Math.floor(diffHr / 24)} hari lalu`
+}
+
+function formatTime(iso) {
+  return new Date(iso).toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit' })
+}
 
 const WEATHER = [
   { hari: 'Hari ini', icon: '🌧️', hujan: '12mm', suhu: '27°C' },
@@ -37,9 +43,66 @@ export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [mobileSidebar, setMobileSidebar] = useState(false)
 
-  const paras = 82
-  const bateri = 76
-  const solar = 18.4
+  const [loading, setLoading] = useState(true)
+  const [profile, setProfile] = useState(null)
+  const [unit, setUnit] = useState(null)
+  const [readings, setReadings] = useState([])
+
+  useEffect(() => {
+    let channel
+
+    const load = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { setLoading(false); return }
+
+      const [{ data: profileData }, { data: unitData }] = await Promise.all([
+        supabase.from('profiles').select('full_name, email').eq('id', user.id).single(),
+        supabase.from('units').select('*').eq('owner_id', user.id).single(),
+      ])
+      setProfile(profileData)
+      setUnit(unitData)
+
+      if (unitData) {
+        const { data: readingData } = await supabase
+          .from('sensor_data')
+          .select('*')
+          .eq('unit_id', unitData.id)
+          .order('created_at', { ascending: false })
+          .limit(50)
+        setReadings(readingData || [])
+
+        channel = supabase
+          .channel(`sensor_data_${unitData.id}`)
+          .on('postgres_changes', {
+            event: 'INSERT', schema: 'public', table: 'sensor_data',
+            filter: `unit_id=eq.${unitData.id}`,
+          }, (payload) => {
+            setReadings(prev => [payload.new, ...prev].slice(0, 50))
+          })
+          .subscribe()
+      }
+      setLoading(false)
+    }
+    load()
+
+    return () => { if (channel) supabase.removeChannel(channel) }
+  }, [])
+
+  const latest = readings[0] || null
+  const isOnline = latest ? (Date.now() - new Date(latest.created_at).getTime()) / 60000 < ONLINE_THRESHOLD_MIN : false
+  const paras = latest && latest.paras_air_pct >= 0 ? Math.round(latest.paras_air_pct) : null
+  const parasLiter = latest && latest.paras_air_liter >= 0 ? Math.round(latest.paras_air_liter) : null
+  const kapasiti = unit?.kapasiti_liter ?? null
+  const hujan = latest ? (latest.hujan_status ? 'Ya' : 'Tidak') : null
+  const solar = latest ? latest.solar_volt.toFixed(1) : null
+  const bateri = latest && latest.bateri_pct != null ? Math.round(latest.bateri_pct) : null
+  const firstName = profile?.full_name?.split(' ')[0] || 'Pengguna'
+  const nameInitial = (profile?.full_name || 'P')[0].toUpperCase()
+
+  // Tank SVG fill — kotak dalam tangki: y 8-94 (tinggi 86)
+  const tankFillPct = paras ?? 0
+  const tankFillHeight = (tankFillPct / 100) * 86
+  const tankFillY = 8 + (86 - tankFillHeight)
 
   return (
     <div style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", display: 'flex', minHeight: '100vh', width: '100%', background: '#FBF6EE', color: '#1D2420' }}>
@@ -233,9 +296,9 @@ export default function UserDashboard() {
 
         <div className="sidebar-bottom">
           <div className="sidebar-user">
-            <div className="sidebar-avatar">A</div>
+            <div className="sidebar-avatar">{nameInitial}</div>
             <div>
-              <div className="sidebar-user-name">Ahmad Rizal</div>
+              <div className="sidebar-user-name">{profile?.full_name || 'Pengguna'}</div>
               <div className="sidebar-user-role">Pengguna</div>
             </div>
             <button className="sidebar-logout" onClick={() => navigate('/login')}>
@@ -286,7 +349,7 @@ export default function UserDashboard() {
               <i className="ti ti-bell" aria-hidden="true" />
               <span className="topbar-badge">1</span>
             </button>
-            <div className="topbar-avatar">A</div>
+            <div className="topbar-avatar">{nameInitial}</div>
           </div>
         </div>
 
@@ -295,43 +358,54 @@ export default function UserDashboard() {
           <>
             <div className="page-header">
               <div>
-                <div className="page-title">Selamat kembali, Ahmad 👋</div>
-                <div className="page-sub">No. 12, Jalan Damai, Ampang · Kemaskini 2 min lalu</div>
+                <div className="page-title">Selamat kembali, {firstName} 👋</div>
+                <div className="page-sub">
+                  {unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Kemaskini {formatRelativeTime(latest?.created_at)}
+                </div>
               </div>
-              <div className="online-badge">
-                <div className="online-dot" /> Dalam Talian
+              <div className="online-badge" style={!isOnline ? { background: '#F0EADC', color: '#8A8578' } : undefined}>
+                <div className="online-dot" style={!isOnline ? { background: '#8A8578', animation: 'none' } : undefined} />
+                {isOnline ? 'Dalam Talian' : 'Luar Talian'}
               </div>
             </div>
+
+            {loading && <div className="section-card" style={{ marginBottom: 16 }}>Memuatkan data...</div>}
+            {!loading && !unit && (
+              <div className="section-card" style={{ marginBottom: 16 }}>
+                Tiada unit SuHu didaftarkan untuk akaun anda lagi. Hubungi admin untuk pendaftaran unit.
+              </div>
+            )}
+            {!loading && unit && readings.length === 0 && (
+              <div className="section-card" style={{ marginBottom: 16 }}>
+                Unit anda dah berdaftar tapi belum ada bacaan sensor diterima lagi. Pastikan unit online dan disambung ke WiFi.
+              </div>
+            )}
 
             {/* Metrics */}
             <div className="metrics-grid">
               <div className="metric-card metric-hero">
                 <div className="metric-icon-chip chip-hero"><i className="ti ti-ripple" aria-hidden="true" /></div>
                 <div className="metric-label">Paras Air</div>
-                <div className="metric-val">{paras}</div>
-                <div className="metric-unit">% penuh</div>
-                <span className="metric-sub sub-green">↑ Mengisi</span>
+                <div className="metric-val">{paras !== null ? paras : '–'}</div>
+                <div className="metric-unit">{paras !== null ? '% penuh' : 'sensor gagal baca'}</div>
               </div>
               <div className="metric-card">
                 <div className="metric-icon-chip chip-blue"><i className="ti ti-cloud-rain" aria-hidden="true" /></div>
                 <div className="metric-label">Hujan</div>
-                <div className="metric-val" style={{ fontSize: 22 }}>Ya</div>
-                <div className="metric-unit">aktif sekarang</div>
-                <span className="metric-sub sub-green">🌧️ Sedang turun</span>
+                <div className="metric-val" style={{ fontSize: 22 }}>{hujan ?? '–'}</div>
+                <div className="metric-unit">{latest ? 'bacaan terkini' : 'tiada data'}</div>
               </div>
               <div className="metric-card">
                 <div className="metric-icon-chip chip-amber"><i className="ti ti-solar-panel" aria-hidden="true" /></div>
                 <div className="metric-label">Solar</div>
-                <div className="metric-val">{solar}</div>
+                <div className="metric-val">{solar ?? '–'}</div>
                 <div className="metric-unit">V output</div>
-                <span className="metric-sub sub-green">☀️ Optimum</span>
               </div>
               <div className="metric-card">
                 <div className="metric-icon-chip chip-green"><i className="ti ti-battery-charging" aria-hidden="true" /></div>
                 <div className="metric-label">Bateri</div>
-                <div className="metric-val">{bateri}</div>
+                <div className="metric-val">{bateri !== null ? bateri : '–'}</div>
                 <div className="metric-unit">% caj</div>
-                <span className="metric-sub sub-amber">⚡ Mengecas</span>
               </div>
             </div>
 
@@ -340,30 +414,29 @@ export default function UserDashboard() {
               <div className="section-card">
                 <div className="section-title"><i className="ti ti-container" aria-hidden="true" /> Status Tangki</div>
                 <div className="tank-wrap">
-                  <svg width="64" height="110" viewBox="0 0 64 110" aria-label="Tangki 82% penuh">
+                  <svg width="64" height="110" viewBox="0 0 64 110" aria-label={paras !== null ? `Tangki ${paras}% penuh` : 'Tangki tiada bacaan'}>
                     <rect x="8" y="6" width="48" height="90" rx="6" fill="none" stroke="#E3DAC4" strokeWidth="1.5"/>
                     <rect x="10" y="8" width="44" height="86" rx="4" fill="#FBF8F1"/>
-                    <rect x="10" y="23" width="44" height="71" rx="0" fill="#1D9E75" fillOpacity="0.35"/>
+                    {paras !== null && <rect x="10" y={tankFillY} width="44" height={tankFillHeight} rx="0" fill="#1D9E75" fillOpacity="0.35"/>}
                     <rect x="24" y="96" width="16" height="8" rx="3" fill="#E3DAC4"/>
-                    <text x="32" y="64" textAnchor="middle" fontSize="13" fontWeight="700" fill="#178763">{paras}%</text>
+                    <text x="32" y="64" textAnchor="middle" fontSize="13" fontWeight="700" fill="#178763">{paras !== null ? `${paras}%` : '–'}</text>
                   </svg>
                   <div className="tank-info">
-                    <div className="tank-info-row"><span className="tank-info-label">Isipadu</span><span className="tank-info-val">1,640 L</span></div>
-                    <div className="tank-info-row"><span className="tank-info-label">Kapasiti</span><span className="tank-info-val">2,000 L</span></div>
-                    <div className="tank-info-row"><span className="tank-info-label">Kadar isi</span><span className="tank-info-val">+12 L/jam</span></div>
-                    <div className="tank-info-row"><span className="tank-info-label">Penuh dalam</span><span className="tank-info-val">~3.2 jam</span></div>
+                    <div className="tank-info-row"><span className="tank-info-label">Isipadu</span><span className="tank-info-val">{parasLiter !== null ? `${parasLiter.toLocaleString('ms-MY')} L` : '–'}</span></div>
+                    <div className="tank-info-row"><span className="tank-info-label">Kapasiti</span><span className="tank-info-val">{kapasiti ? `${kapasiti.toLocaleString('ms-MY')} L` : '–'}</span></div>
+                    <div className="tank-info-row"><span className="tank-info-label">Wifi Unit</span><span className="tank-info-val">{latest ? (latest.is_wifi_connected ? 'Bersambung' : 'Terputus') : '–'}</span></div>
                   </div>
                 </div>
                 <div>
                   <div className="bar-row">
                     <span className="bar-label">Solar</span>
-                    <div className="bar-track"><div className="bar-fill" style={{ width: '74%', background: '#EF9F27' }} /></div>
-                    <span className="bar-val">18.4V</span>
+                    <div className="bar-track"><div className="bar-fill" style={{ width: latest ? `${Math.min(latest.solar_volt / 25 * 100, 100)}%` : '0%', background: '#EF9F27' }} /></div>
+                    <span className="bar-val">{solar !== null ? `${solar}V` : '–'}</span>
                   </div>
                   <div className="bar-row">
                     <span className="bar-label">Bateri</span>
-                    <div className="bar-track"><div className="bar-fill" style={{ width: bateri + '%', background: '#1D9E75' }} /></div>
-                    <span className="bar-val">{bateri}%</span>
+                    <div className="bar-track"><div className="bar-fill" style={{ width: (bateri ?? 0) + '%', background: '#1D9E75' }} /></div>
+                    <span className="bar-val">{bateri !== null ? `${bateri}%` : '–'}</span>
                   </div>
                 </div>
               </div>
@@ -376,16 +449,19 @@ export default function UserDashboard() {
                     <tr><th>Masa</th><th>Paras</th><th>Hujan</th><th>Solar</th><th>Bateri</th></tr>
                   </thead>
                   <tbody>
-                    {LOG_DATA.map((l, i) => (
-                      <tr key={i}>
-                        <td style={{ color: '#A6A093', fontFamily: 'monospace' }}>{l.masa}</td>
-                        <td>{l.paras}%</td>
+                    {readings.length === 0 && (
+                      <tr><td colSpan={5} style={{ color: '#A6A093', textAlign: 'center', padding: '20px 0' }}>Tiada bacaan lagi</td></tr>
+                    )}
+                    {readings.slice(0, 8).map((l) => (
+                      <tr key={l.id}>
+                        <td style={{ color: '#A6A093', fontFamily: 'monospace' }}>{formatTime(l.created_at)}</td>
+                        <td>{l.paras_air_pct >= 0 ? `${Math.round(l.paras_air_pct)}%` : '–'}</td>
                         <td>
-                          <span className={`dot ${l.hujan === 'Ya' ? 'dot-g' : l.hujan === 'Rintik' ? 'dot-a' : 'dot-r'}`} />
-                          {l.hujan}
+                          <span className={`dot ${l.hujan_status ? 'dot-g' : 'dot-r'}`} />
+                          {l.hujan_status ? 'Ya' : 'Tidak'}
                         </td>
-                        <td>{l.solar}V</td>
-                        <td>{l.bateri}%</td>
+                        <td>{l.solar_volt.toFixed(1)}V</td>
+                        <td>{l.bateri_pct != null ? `${Math.round(l.bateri_pct)}%` : '–'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -420,26 +496,31 @@ export default function UserDashboard() {
               </div>
             </div>
             <div className="section-card">
-              <div className="section-title"><i className="ti ti-table" aria-hidden="true" /> Log Sensor — 10 Jun 2026</div>
+              <div className="section-title"><i className="ti ti-table" aria-hidden="true" /> Log Sensor — {readings.length} bacaan terkini</div>
               <table className="log-table">
                 <thead>
                   <tr><th>Masa</th><th>Paras Air</th><th>Hujan</th><th>Solar</th><th>Bateri</th></tr>
                 </thead>
                 <tbody>
-                  {LOG_DATA.concat(LOG_DATA).map((l, i) => (
-                    <tr key={i}>
-                      <td style={{ color: '#A6A093', fontFamily: 'monospace' }}>{l.masa}</td>
+                  {readings.length === 0 && (
+                    <tr><td colSpan={5} style={{ color: '#A6A093', textAlign: 'center', padding: '20px 0' }}>Tiada bacaan lagi</td></tr>
+                  )}
+                  {readings.map((l) => (
+                    <tr key={l.id}>
+                      <td style={{ color: '#A6A093', fontFamily: 'monospace' }}>{new Date(l.created_at).toLocaleString('ms-MY', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <div style={{ width: 60, height: 5, background: '#F0EADC', borderRadius: 999, overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: l.paras + '%', background: '#1D9E75', borderRadius: 999 }} />
+                        {l.paras_air_pct >= 0 ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ width: 60, height: 5, background: '#F0EADC', borderRadius: 999, overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: l.paras_air_pct + '%', background: '#1D9E75', borderRadius: 999 }} />
+                            </div>
+                            {Math.round(l.paras_air_pct)}%
                           </div>
-                          {l.paras}%
-                        </div>
+                        ) : '– gagal baca'}
                       </td>
-                      <td><span className={`dot ${l.hujan === 'Ya' ? 'dot-g' : l.hujan === 'Rintik' ? 'dot-a' : 'dot-r'}`} />{l.hujan}</td>
-                      <td>{l.solar}V</td>
-                      <td>{l.bateri}%</td>
+                      <td><span className={`dot ${l.hujan_status ? 'dot-g' : 'dot-r'}`} />{l.hujan_status ? 'Ya' : 'Tidak'}</td>
+                      <td>{l.solar_volt.toFixed(1)}V</td>
+                      <td>{l.bateri_pct != null ? `${Math.round(l.bateri_pct)}%` : '–'}</td>
                     </tr>
                   ))}
                 </tbody>
