@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
+import LocationPicker from '../components/LocationPicker'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -28,6 +29,10 @@ const MAINTENANCE = [
   { owner: 'Siti Mariam', lokasi: 'Cheras', isu: 'Bateri diganti', tarikh: '10 Apr 2026', status: 'selesai' },
 ]
 
+function emptyAddUnitForm() {
+  return { ownerId: '', serialNumber: '', model: 'SuHu Starter', kapasitiLiter: 630, tarikhPasang: '', tarikhWarranti: '', lokasiAlamat: '', lat: null, lon: null }
+}
+
 const NAV_ITEMS = [
   { id: 'overview', icon: 'ti-layout-dashboard', label: 'Overview', section: 'Utama' },
   { id: 'units', icon: 'ti-list', label: 'Semua Unit', section: 'Utama' },
@@ -43,6 +48,59 @@ export default function AdminDashboard() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
+
+  const [showAddUnit, setShowAddUnit] = useState(false)
+  const [userProfiles, setUserProfiles] = useState([])
+  const [addUnitForm, setAddUnitForm] = useState(emptyAddUnitForm())
+  const [addUnitError, setAddUnitError] = useState('')
+  const [addUnitSaving, setAddUnitSaving] = useState(false)
+  const [addUnitSuccess, setAddUnitSuccess] = useState('')
+
+  useEffect(() => {
+    if (!showAddUnit) return
+    Promise.all([
+      supabase.from('profiles').select('id, full_name, email').eq('role', 'user').order('full_name'),
+      supabase.from('units').select('owner_id'),
+    ]).then(([{ data: profiles }, { data: existingUnits }]) => {
+      const ownedIds = new Set((existingUnits || []).map(u => u.owner_id))
+      setUserProfiles((profiles || []).filter(p => !ownedIds.has(p.id)))
+    })
+  }, [showAddUnit])
+
+  const openAddUnit = () => {
+    setAddUnitForm(emptyAddUnitForm())
+    setAddUnitError('')
+    setAddUnitSuccess('')
+    setShowAddUnit(true)
+  }
+
+  const submitAddUnit = async (e) => {
+    e.preventDefault()
+    const f = addUnitForm
+    if (!f.ownerId) { setAddUnitError('Sila pilih owner unit.'); return }
+    if (!f.serialNumber.trim()) { setAddUnitError('Sila isi nombor siri unit.'); return }
+    if (f.lat == null || f.lon == null) { setAddUnitError('Sila tetapkan lokasi unit pada peta.'); return }
+
+    setAddUnitSaving(true)
+    setAddUnitError('')
+    const { error } = await supabase.from('units').insert({
+      id: f.ownerId,
+      owner_id: f.ownerId,
+      serial_number: f.serialNumber.trim(),
+      model: f.model,
+      lokasi_alamat: f.lokasiAlamat.trim() || null,
+      lokasi_lat: f.lat,
+      lokasi_lon: f.lon,
+      kapasiti_liter: Number(f.kapasitiLiter) || 630,
+      tarikh_pasang: f.tarikhPasang || null,
+      tarikh_warranti: f.tarikhWarranti || null,
+    })
+    setAddUnitSaving(false)
+
+    if (error) { setAddUnitError('Gagal simpan unit: ' + error.message); return }
+    setAddUnitSuccess(`Unit ${f.serialNumber} berjaya didaftarkan.`)
+    setAddUnitForm(emptyAddUnitForm())
+  }
 
   const stats = {
     total: UNITS.length,
@@ -203,6 +261,25 @@ export default function AdminDashboard() {
         .detail-metric-label { font-size: 11px; color: #A6A093; margin-top: 2px; }
 
         .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(20,25,20,0.45); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .modal-card { background: #fff; border-radius: 20px; padding: 26px 28px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+        .modal-title { font-size: 18px; font-weight: 700; color: #171D19; margin-bottom: 18px; }
+        .form-row { margin-bottom: 14px; }
+        .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .form-label { display: block; font-size: 12px; font-weight: 600; color: #8A8578; margin-bottom: 6px; }
+        .form-input, .form-select { width: 100%; background: #FBF8F1; border: 1px solid #F0E9DA; border-radius: 9px; color: #171D19; font-size: 13px; padding: 9px 12px; font-family: inherit; outline: none; }
+        .form-input:focus, .form-select:focus { border-color: #1D9E75; }
+        .form-error { color: #C23A39; font-size: 12px; margin-top: 4px; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+        .btn-primary { background: #1D9E75; color: #fff; border: none; border-radius: 10px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .btn-primary:hover { background: #178763; }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-secondary { background: #F5F0E5; color: #4A463C; border: none; border-radius: 10px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .btn-secondary:hover { background: #EDE6D6; }
+        .btn-add-unit { background: #1D9E75; color: #fff; border: none; border-radius: 10px; padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px; }
+        .btn-add-unit:hover { background: #178763; }
 
         /* Responsive */
         @media (max-width: 900px) {
@@ -401,8 +478,13 @@ export default function AdminDashboard() {
           {activeTab === 'units' && (
             <>
               <div className="page-header">
-                <div className="page-title">Semua Unit Berdaftar</div>
-                <div className="page-sub">{filteredUnits.length} daripada {UNITS.length} unit · Klik baris untuk lihat detail</div>
+                <div>
+                  <div className="page-title">Semua Unit Berdaftar</div>
+                  <div className="page-sub">{filteredUnits.length} daripada {UNITS.length} unit · Klik baris untuk lihat detail</div>
+                </div>
+                <button className="btn-add-unit" onClick={openAddUnit}>
+                  <i className="ti ti-plus" aria-hidden="true" /> Tambah Unit
+                </button>
               </div>
               <div className="section-card">
                 <table className="unit-table">
@@ -568,6 +650,93 @@ export default function AdminDashboard() {
           </>
         )}
       </div>
+
+      {/* ── TAMBAH UNIT (MODAL) ── */}
+      {showAddUnit && (
+        <div className="modal-overlay" onClick={() => setShowAddUnit(false)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Tambah Unit Baru</div>
+
+            {addUnitSuccess ? (
+              <>
+                <div style={{ background: '#DCF2E7', color: '#178763', borderRadius: 12, padding: '14px 16px', fontSize: 13, marginBottom: 4 }}>
+                  ✓ {addUnitSuccess}
+                </div>
+                <div className="modal-actions">
+                  <button className="btn-secondary" onClick={() => setShowAddUnit(false)}>Tutup</button>
+                  <button className="btn-primary" onClick={openAddUnit}>Tambah Lagi</button>
+                </div>
+              </>
+            ) : (
+              <form onSubmit={submitAddUnit}>
+                <div className="form-row">
+                  <label className="form-label">Owner (pengguna berdaftar)</label>
+                  <select className="form-select" value={addUnitForm.ownerId} onChange={e => setAddUnitForm(f => ({ ...f, ownerId: e.target.value }))}>
+                    <option value="">— Pilih owner —</option>
+                    {userProfiles.map(p => (
+                      <option key={p.id} value={p.id}>{p.full_name || p.email} ({p.email})</option>
+                    ))}
+                  </select>
+                  {userProfiles.length === 0 && (
+                    <div style={{ fontSize: 11, color: '#A6A093', marginTop: 4 }}>Tiada pengguna berdaftar yang belum ada unit.</div>
+                  )}
+                </div>
+
+                <div className="form-row-2">
+                  <div className="form-row">
+                    <label className="form-label">No. Siri Unit</label>
+                    <input className="form-input" placeholder="SH-2026-0003" value={addUnitForm.serialNumber} onChange={e => setAddUnitForm(f => ({ ...f, serialNumber: e.target.value }))} />
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">Model</label>
+                    <select className="form-select" value={addUnitForm.model} onChange={e => setAddUnitForm(f => ({ ...f, model: e.target.value }))}>
+                      <option>SuHu Starter</option>
+                      <option>SuHu Pro</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-row-2">
+                  <div className="form-row">
+                    <label className="form-label">Kapasiti Tangki (Liter)</label>
+                    <input className="form-input" type="number" value={addUnitForm.kapasitiLiter} onChange={e => setAddUnitForm(f => ({ ...f, kapasitiLiter: e.target.value }))} />
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">Tarikh Pasang</label>
+                    <input className="form-input" type="date" value={addUnitForm.tarikhPasang} onChange={e => setAddUnitForm(f => ({ ...f, tarikhPasang: e.target.value }))} />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <label className="form-label">Tarikh Tamat Warranti</label>
+                  <input className="form-input" type="date" value={addUnitForm.tarikhWarranti} onChange={e => setAddUnitForm(f => ({ ...f, tarikhWarranti: e.target.value }))} />
+                </div>
+
+                <div className="form-row">
+                  <label className="form-label">Alamat Lokasi</label>
+                  <input className="form-input" placeholder="No 12, Jalan Damai, Ampang" value={addUnitForm.lokasiAlamat} onChange={e => setAddUnitForm(f => ({ ...f, lokasiAlamat: e.target.value }))} />
+                </div>
+
+                <div className="form-row">
+                  <label className="form-label">Lokasi pada Peta (untuk ramalan cuaca)</label>
+                  <LocationPicker
+                    lat={addUnitForm.lat}
+                    lon={addUnitForm.lon}
+                    onChange={(lat, lon) => setAddUnitForm(f => ({ ...f, lat, lon }))}
+                  />
+                </div>
+
+                {addUnitError && <div className="form-error">{addUnitError}</div>}
+
+                <div className="modal-actions">
+                  <button type="button" className="btn-secondary" onClick={() => setShowAddUnit(false)}>Batal</button>
+                  <button type="submit" className="btn-primary" disabled={addUnitSaving}>{addUnitSaving ? 'Menyimpan...' : 'Simpan Unit'}</button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

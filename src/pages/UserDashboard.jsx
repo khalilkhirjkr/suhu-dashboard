@@ -18,15 +18,18 @@ function formatTime(iso) {
   return new Date(iso).toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit' })
 }
 
-const WEATHER = [
-  { hari: 'Hari ini', icon: '🌧️', hujan: '12mm', suhu: '27°C' },
-  { hari: 'Esok', icon: '⛅', hujan: '3mm', suhu: '29°C' },
-  { hari: 'Rab', icon: '☀️', hujan: '0mm', suhu: '32°C' },
-  { hari: 'Kha', icon: '🌧️', hujan: '18mm', suhu: '26°C' },
-  { hari: 'Jum', icon: '⛅', hujan: '5mm', suhu: '28°C' },
-  { hari: 'Sab', icon: '☀️', hujan: '0mm', suhu: '33°C' },
-  { hari: 'Ahad', icon: '🌦️', hujan: '8mm', suhu: '27°C' },
-]
+const DAY_NAMES = ['Ahad', 'Isnin', 'Selasa', 'Rabu', 'Khamis', 'Jumaat', 'Sabtu']
+
+function weatherIcon(code) {
+  if (code === 0) return '☀️'
+  if (code === 1 || code === 2) return '⛅'
+  if (code === 3) return '☁️'
+  if (code === 45 || code === 48) return '🌫️'
+  if (code >= 51 && code <= 57) return '🌦️'
+  if (code >= 61 && code <= 82) return '🌧️'
+  if (code >= 95) return '⛈️'
+  return '⛅'
+}
 
 const NAV_MAIN = [
   { id: 'dashboard', icon: 'ti-layout-dashboard', label: 'Tangki Saya' },
@@ -47,6 +50,8 @@ export default function UserDashboard() {
   const [profile, setProfile] = useState(null)
   const [unit, setUnit] = useState(null)
   const [readings, setReadings] = useState([])
+  const [weather, setWeather] = useState([])
+  const [weatherLoading, setWeatherLoading] = useState(false)
 
   useEffect(() => {
     let channel
@@ -87,6 +92,28 @@ export default function UserDashboard() {
 
     return () => { if (channel) supabase.removeChannel(channel) }
   }, [])
+
+  useEffect(() => {
+    if (unit?.lokasi_lat == null || unit?.lokasi_lon == null) return
+    setWeatherLoading(true)
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${unit.lokasi_lat}&longitude=${unit.lokasi_lon}&daily=precipitation_sum,temperature_2m_max,temperature_2m_min,weathercode&timezone=Asia%2FKuala_Lumpur&forecast_days=7`)
+      .then(res => res.json())
+      .then(data => {
+        if (!data.daily) { setWeather([]); return }
+        const days = data.daily.time.map((date, i) => ({
+          date,
+          hari: i === 0 ? 'Hari ini' : i === 1 ? 'Esok' : DAY_NAMES[new Date(date + 'T00:00:00').getDay()],
+          icon: weatherIcon(data.daily.weathercode[i]),
+          hujanMm: data.daily.precipitation_sum[i],
+          suhuMax: Math.round(data.daily.temperature_2m_max[i]),
+          suhuMin: Math.round(data.daily.temperature_2m_min[i]),
+          code: data.daily.weathercode[i],
+        }))
+        setWeather(days)
+      })
+      .catch(() => setWeather([]))
+      .finally(() => setWeatherLoading(false))
+  }, [unit?.lokasi_lat, unit?.lokasi_lon])
 
   const latest = readings[0] || null
   const isOnline = latest ? (Date.now() - new Date(latest.created_at).getTime()) / 60000 < ONLINE_THRESHOLD_MIN : false
@@ -471,17 +498,23 @@ export default function UserDashboard() {
 
             {/* Weather */}
             <div className="section-card">
-              <div className="section-title"><i className="ti ti-cloud" aria-hidden="true" /> Ramalan Cuaca 7 Hari — Ampang</div>
-              <div className="weather-scroll">
-                {WEATHER.map((w, i) => (
-                  <div key={i} className={`weather-day${i === 0 ? ' today' : ''}`}>
-                    <div className="weather-day-name">{w.hari}</div>
-                    <div className="weather-day-icon">{w.icon}</div>
-                    <div className="weather-day-rain">{w.hujan}</div>
-                    <div className="weather-day-temp">{w.suhu}</div>
-                  </div>
-                ))}
-              </div>
+              <div className="section-title"><i className="ti ti-cloud" aria-hidden="true" /> Ramalan Cuaca 7 Hari{unit?.lokasi_alamat ? ` — ${unit.lokasi_alamat}` : ''}</div>
+              {weatherLoading && <div style={{ color: '#A6A093', fontSize: 13 }}>Memuatkan ramalan cuaca...</div>}
+              {!weatherLoading && weather.length === 0 && (
+                <div style={{ color: '#A6A093', fontSize: 13 }}>Tiada koordinat lokasi untuk unit ini — ramalan cuaca tidak tersedia.</div>
+              )}
+              {!weatherLoading && weather.length > 0 && (
+                <div className="weather-scroll">
+                  {weather.map((w, i) => (
+                    <div key={w.date} className={`weather-day${i === 0 ? ' today' : ''}`}>
+                      <div className="weather-day-name">{w.hari}</div>
+                      <div className="weather-day-icon">{w.icon}</div>
+                      <div className="weather-day-rain">{Math.round(w.hujanMm)}mm</div>
+                      <div className="weather-day-temp">{w.suhuMax}°C</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -535,34 +568,48 @@ export default function UserDashboard() {
             <div className="page-header">
               <div>
                 <div className="page-title">Ramalan Cuaca</div>
-                <div className="page-sub">Kawasan Ampang, Selangor · Open-Meteo API</div>
+                <div className="page-sub">{unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Open-Meteo API</div>
               </div>
             </div>
             <div className="section-card" style={{ marginBottom: 16 }}>
               <div className="section-title"><i className="ti ti-cloud" aria-hidden="true" /> 7 Hari ke Hadapan</div>
-              <div className="weather-scroll">
-                {WEATHER.map((w, i) => (
-                  <div key={i} className={`weather-day${i === 0 ? ' today' : ''}`}>
-                    <div className="weather-day-name">{w.hari}</div>
-                    <div className="weather-day-icon">{w.icon}</div>
-                    <div className="weather-day-rain">{w.hujan}</div>
-                    <div className="weather-day-temp">{w.suhu}</div>
+              {weatherLoading && <div style={{ color: '#A6A093', fontSize: 13 }}>Memuatkan ramalan cuaca...</div>}
+              {!weatherLoading && weather.length === 0 && (
+                <div style={{ color: '#A6A093', fontSize: 13 }}>Tiada koordinat lokasi untuk unit ini — ramalan cuaca tidak tersedia. Hubungi admin untuk kemas kini lokasi.</div>
+              )}
+              {!weatherLoading && weather.length > 0 && (
+                <div className="weather-scroll">
+                  {weather.map((w, i) => (
+                    <div key={w.date} className={`weather-day${i === 0 ? ' today' : ''}`}>
+                      <div className="weather-day-name">{w.hari}</div>
+                      <div className="weather-day-icon">{w.icon}</div>
+                      <div className="weather-day-rain">{Math.round(w.hujanMm)}mm</div>
+                      <div className="weather-day-temp">{w.suhuMax}°/{w.suhuMin}°C</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {weather.length > 0 && (
+              <div className="two-col">
+                <div className="section-card">
+                  <div className="section-title"><i className="ti ti-droplet" aria-hidden="true" /> Jumlah Hujan Minggu Ini</div>
+                  <div style={{ fontSize: 40, fontWeight: 700, color: '#2E71C2', letterSpacing: -1 }}>
+                    {Math.round(weather.reduce((s, w) => s + w.hujanMm, 0))}mm
                   </div>
-                ))}
+                  <div style={{ fontSize: 13, color: '#8A8578', marginTop: 6 }}>Jumlah dijangka bagi 7 hari akan datang</div>
+                </div>
+                <div className="section-card">
+                  <div className="section-title"><i className="ti ti-sun" aria-hidden="true" /> Hari Cerah Minggu Ini</div>
+                  <div style={{ fontSize: 40, fontWeight: 700, color: '#B87710', letterSpacing: -1 }}>
+                    {weather.filter(w => w.code === 0 || w.code === 1).length} hari
+                  </div>
+                  <div style={{ fontSize: 13, color: '#8A8578', marginTop: 6 }}>
+                    {weather.filter(w => w.code === 0 || w.code === 1).map(w => w.hari).join(', ') || 'Tiada hari cerah dijangka'}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="two-col">
-              <div className="section-card">
-                <div className="section-title"><i className="ti ti-droplet" aria-hidden="true" /> Jumlah Hujan Minggu Ini</div>
-                <div style={{ fontSize: 40, fontWeight: 700, color: '#2E71C2', letterSpacing: -1 }}>46mm</div>
-                <div style={{ fontSize: 13, color: '#8A8578', marginTop: 6 }}>Jangkaan pengisian tangki: +920L</div>
-              </div>
-              <div className="section-card">
-                <div className="section-title"><i className="ti ti-sun" aria-hidden="true" /> Hari Cerah Minggu Ini</div>
-                <div style={{ fontSize: 40, fontWeight: 700, color: '#B87710', letterSpacing: -1 }}>3 hari</div>
-                <div style={{ fontSize: 13, color: '#8A8578', marginTop: 6 }}>Solar optimum dijangka Rabu & Sabtu</div>
-              </div>
-            </div>
+            )}
           </>
         )}
 
