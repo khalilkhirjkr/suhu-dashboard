@@ -123,7 +123,8 @@ export default function UserDashboard() {
   const hujan = latest ? (latest.hujan_status ? 'Ya' : 'Tidak') : null
   const solar = latest ? latest.solar_volt.toFixed(1) : null
   const bateri = latest && latest.bateri_pct != null ? Math.round(latest.bateri_pct) : null
-  const firstName = profile?.full_name?.split(' ')[0] || 'Pengguna'
+  // Nama panggilan = nama penuh tanpa bahagian patronimik (bin/binti ...)
+  const firstName = profile?.full_name?.split(/\s+bin\s+|\s+binti\s+/i)[0].trim() || 'Pengguna'
   const nameInitial = (profile?.full_name || 'P')[0].toUpperCase()
 
   // Tank SVG fill — kotak dalam tangki: y 8-94 (tinggi 86)
