@@ -221,7 +221,7 @@ export default function AdminDashboard() {
         .stat-box-label { font-size: 12px; color: #8A8578; }
         .stat-box.stat-hero .stat-box-label { color: rgba(255,255,255,0.5); }
 
-        .section-card { background: #fff; border-radius: 20px; padding: 22px 24px; margin-bottom: 16px; box-shadow: 0 2px 14px rgba(60,45,20,0.04); }
+        .section-card { background: #fff; border-radius: 20px; padding: 22px 24px; margin-bottom: 16px; box-shadow: 0 2px 14px rgba(60,45,20,0.04); overflow-x: auto; }
         .section-title { font-size: 14px; font-weight: 700; color: #171D19; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
         .section-title i { font-size: 16px; color: #1D9E75; }
 
@@ -264,7 +264,7 @@ export default function AdminDashboard() {
 
         /* Modal */
         .modal-overlay { position: fixed; inset: 0; background: rgba(20,25,20,0.45); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        .modal-card { background: #fff; border-radius: 20px; padding: 26px 28px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+        .modal-card { background: #fff; border-radius: 20px; padding: 26px 28px; width: 100%; min-width: 0; max-width: 480px; max-height: 90vh; overflow-y: auto; overflow-x: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.2); box-sizing: border-box; }
         .modal-title { font-size: 18px; font-weight: 700; color: #171D19; margin-bottom: 18px; }
         .form-row { margin-bottom: 14px; }
         .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -291,6 +291,11 @@ export default function AdminDashboard() {
           .detail-panel { width: 100%; }
           .content-topbar { flex-wrap: wrap; }
           .topbar-search { max-width: none; order: 2; flex-basis: 100%; }
+          .form-row-2 { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 480px) {
+          .modal-overlay { padding: 12px; }
+          .modal-card { padding: 20px 16px; }
         }
       `}</style>
 

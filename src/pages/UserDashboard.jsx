@@ -209,7 +209,7 @@ export default function UserDashboard() {
         .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
         .full-col { margin-bottom: 16px; }
 
-        .section-card { background: #fff; border-radius: 20px; padding: 22px 24px; box-shadow: 0 2px 14px rgba(60,45,20,0.04); }
+        .section-card { background: #fff; border-radius: 20px; padding: 22px 24px; box-shadow: 0 2px 14px rgba(60,45,20,0.04); overflow-x: auto; }
         .section-title { font-size: 13px; font-weight: 700; color: #171D19; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
         .section-title i { font-size: 15px; color: #1D9E75; }
 
