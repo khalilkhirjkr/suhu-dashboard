@@ -1,14 +1,24 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 
+delete L.Icon.Default.prototype._getIconUrl
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+})
+
 const UNITS = [
-  { id: 1, owner: 'Ahmad Rizal', phone: '012-3456789', lokasi: 'Ampang, Selangor', paras: 82, status: 'aktif', solar: 18.4, bateri: 76, warranti: 'Jan 2028', dashboard: 'aktif', servis: '1 Mei 2026', model: 'SuHu Pro', siri: 'SH-2026-0042' },
-  { id: 2, owner: 'Siti Mariam', phone: '011-2345678', lokasi: 'Cheras, KL', paras: 65, status: 'aktif', solar: 17.2, bateri: 60, warranti: 'Mac 2027', dashboard: 'aktif', servis: '10 Apr 2026', model: 'SuHu Starter', siri: 'SH-2026-0018' },
-  { id: 3, owner: 'Hafiz Zaki', phone: '013-3456789', lokasi: 'Puchong, Selangor', paras: 40, status: 'selenggara', solar: 0, bateri: 20, warranti: 'Nov 2027', dashboard: 'aktif', servis: '3 Jun 2026', model: 'SuHu Pro', siri: 'SH-2026-0031' },
-  { id: 4, owner: 'Nurul Huda', phone: '019-4567890', lokasi: 'Kajang, Selangor', paras: 91, status: 'aktif', solar: 19.1, bateri: 88, warranti: 'Feb 2028', dashboard: 'aktif', servis: '20 Mar 2026', model: 'SuHu Pro', siri: 'SH-2026-0055' },
-  { id: 5, owner: 'Zulkifli Md', phone: '017-5678901', lokasi: 'Semenyih, Selangor', paras: 55, status: 'aktif', solar: 15.8, bateri: 50, warranti: 'Jul 2026', dashboard: 'hampir tamat', servis: '15 Feb 2026', model: 'SuHu Starter', siri: 'SH-2025-0009' },
-  { id: 6, owner: 'Faizal Harun', phone: '016-6789012', lokasi: 'Rawang, Selangor', paras: 73, status: 'aktif', solar: 16.5, bateri: 65, warranti: 'Sep 2027', dashboard: 'aktif', servis: '5 Apr 2026', model: 'SuHu Starter', siri: 'SH-2026-0022' },
+  { id: 1, owner: 'Ahmad Rizal', phone: '012-3456789', lokasi: 'Ampang, Selangor', lat: 3.1478, lng: 101.7620, paras: 82, status: 'aktif', solar: 18.4, bateri: 76, warranti: 'Jan 2028', dashboard: 'aktif', servis: '1 Mei 2026', model: 'SuHu Pro', siri: 'SH-2026-0042' },
+  { id: 2, owner: 'Siti Mariam', phone: '011-2345678', lokasi: 'Cheras, KL', lat: 3.1073, lng: 101.7420, paras: 65, status: 'aktif', solar: 17.2, bateri: 60, warranti: 'Mac 2027', dashboard: 'aktif', servis: '10 Apr 2026', model: 'SuHu Starter', siri: 'SH-2026-0018' },
+  { id: 3, owner: 'Hafiz Zaki', phone: '013-3456789', lokasi: 'Puchong, Selangor', lat: 3.0219, lng: 101.6172, paras: 40, status: 'selenggara', solar: 0, bateri: 20, warranti: 'Nov 2027', dashboard: 'aktif', servis: '3 Jun 2026', model: 'SuHu Pro', siri: 'SH-2026-0031' },
+  { id: 4, owner: 'Nurul Huda', phone: '019-4567890', lokasi: 'Kajang, Selangor', lat: 2.9931, lng: 101.7874, paras: 91, status: 'aktif', solar: 19.1, bateri: 88, warranti: 'Feb 2028', dashboard: 'aktif', servis: '20 Mar 2026', model: 'SuHu Pro', siri: 'SH-2026-0055' },
+  { id: 5, owner: 'Zulkifli Md', phone: '017-5678901', lokasi: 'Semenyih, Selangor', lat: 2.9486, lng: 101.8471, paras: 55, status: 'aktif', solar: 15.8, bateri: 50, warranti: 'Jul 2026', dashboard: 'hampir tamat', servis: '15 Feb 2026', model: 'SuHu Starter', siri: 'SH-2025-0009' },
+  { id: 6, owner: 'Faizal Harun', phone: '016-6789012', lokasi: 'Rawang, Selangor', lat: 3.3251, lng: 101.5766, paras: 73, status: 'aktif', solar: 16.5, bateri: 65, warranti: 'Sep 2027', dashboard: 'aktif', servis: '5 Apr 2026', model: 'SuHu Starter', siri: 'SH-2026-0022' },
 ]
 
 const MAINTENANCE = [
@@ -173,8 +183,7 @@ export default function AdminDashboard() {
         .maint-title { font-size: 13px; font-weight: 600; color: #171D19; margin-bottom: 3px; }
         .maint-sub { font-size: 11px; color: #A6A093; }
 
-        .map-box { height: 220px; background: #F5F0E5; border: 1.5px dashed #E3DAC4; border-radius: 16px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #A6A093; font-size: 13px; }
-        .map-box i { font-size: 28px; color: #C7BFA9; }
+        .map-box { height: 420px; border-radius: 16px; overflow: hidden; }
 
         /* Detail panel */
         .detail-panel { background: #fff; border-left: 1px solid #F0E9DA; width: 320px; padding: 24px 22px; position: fixed; right: 0; top: 0; bottom: 0; overflow-y: auto; z-index: 50; transform: translateX(100%); transition: transform 0.25s; box-shadow: -8px 0 30px rgba(60,45,20,0.08); }
@@ -431,9 +440,21 @@ export default function AdminDashboard() {
               </div>
               <div className="section-card">
                 <div className="map-box">
-                  <i className="ti ti-map" aria-hidden="true" />
-                  <span>Google Maps API — akan disambung selepas setup Supabase</span>
-                  <span style={{ fontSize: 11 }}>Pin akan tunjuk lokasi setiap unit</span>
+                  <MapContainer center={[3.05, 101.68]} zoom={10} scrollWheelZoom={false} style={{ height: '100%', width: '100%', borderRadius: 16 }}>
+                    <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    {UNITS.map(u => (
+                      <Marker key={u.id} position={[u.lat, u.lng]} eventHandlers={{ click: () => { setSelectedUnit(u); setDetailOpen(true) } }}>
+                        <Popup>
+                          <strong>{u.owner}</strong><br />
+                          {u.lokasi}<br />
+                          Paras Air: {u.paras}%
+                        </Popup>
+                      </Marker>
+                    ))}
+                  </MapContainer>
                 </div>
                 <div style={{ marginTop: 16 }}>
                   <table className="unit-table">
