@@ -88,7 +88,7 @@ export default function AdminDashboard() {
         /* Layout */
         .admin-layout { display: flex; flex: 1; min-height: 100vh; }
         .admin-sidebar { width: 230px; min-height: 100vh; background: #12211C; display: flex; flex-direction: column; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-        .admin-main { flex: 1; min-width: 0; padding: 28px 32px 40px; overflow-y: auto; background: #FBF6EE; }
+        .admin-main { flex: 1; min-width: 0; padding: 28px 32px 40px; background: #FBF6EE; }
 
         /* Sidebar styles */
         .sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 22px 20px 22px; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; }
@@ -183,7 +183,7 @@ export default function AdminDashboard() {
         .maint-title { font-size: 13px; font-weight: 600; color: #171D19; margin-bottom: 3px; }
         .maint-sub { font-size: 11px; color: #A6A093; }
 
-        .map-box { height: 420px; border-radius: 16px; overflow: hidden; }
+        .map-box { height: 420px; border-radius: 16px; overflow: hidden; position: sticky; top: 20px; z-index: 1; }
 
         /* Detail panel */
         .detail-panel { background: #fff; border-left: 1px solid #F0E9DA; width: 320px; padding: 24px 22px; position: fixed; right: 0; top: 0; bottom: 0; overflow-y: auto; z-index: 50; transform: translateX(100%); transition: transform 0.25s; box-shadow: -8px 0 30px rgba(60,45,20,0.08); }
@@ -446,7 +446,7 @@ export default function AdminDashboard() {
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     />
                     {UNITS.map(u => (
-                      <Marker key={u.id} position={[u.lat, u.lng]} eventHandlers={{ click: () => { setSelectedUnit(u); setDetailOpen(true) } }}>
+                      <Marker key={u.id} position={[u.lat, u.lng]}>
                         <Popup>
                           <strong>{u.owner}</strong><br />
                           {u.lokasi}<br />
