@@ -31,6 +31,26 @@ function weatherIcon(code) {
   return '⛅'
 }
 
+const ALERT_LABELS = {
+  tangki_penuh: { label: 'Tangki hampir penuh', icon: '🪣', prefKey: 'tangki_penuh' },
+  tangki_kosong: { label: 'Tangki hampir kosong', icon: '💧', prefKey: 'tangki_kosong' },
+  unit_offline: { label: 'Unit luar talian', icon: '🔌', prefKey: 'unit_offline' },
+  bateri_rendah: { label: 'Bateri rendah', icon: '🔋', prefKey: 'bateri_rendah' },
+  sensor_gagal: { label: 'Sensor paras air gagal baca', icon: '📡', prefKey: 'sensor_gagal' },
+  bateri_tak_charge: { label: 'Bateri tidak mengecas', icon: '⚡', prefKey: 'bateri_tak_charge' },
+  risiko_overflow: { label: 'Risiko tangki melimpah (hujan lebat)', icon: '🌧️', prefKey: 'risiko_overflow' },
+}
+
+const NOTIF_TOGGLES = [
+  { key: 'tangki_penuh', label: 'Tangki hampir penuh', sub: 'Notifikasi bila paras air melebihi 90%' },
+  { key: 'tangki_kosong', label: 'Tangki hampir kosong', sub: 'Notifikasi bila paras air kurang dari 20%' },
+  { key: 'unit_offline', label: 'Unit luar talian', sub: 'Notifikasi bila unit tidak hantar data >2 jam' },
+  { key: 'bateri_rendah', label: 'Bateri rendah', sub: 'Notifikasi bila bateri kurang dari 15%' },
+  { key: 'sensor_gagal', label: 'Sensor gagal baca', sub: 'Notifikasi bila sensor paras air gagal berterusan' },
+  { key: 'bateri_tak_charge', label: 'Bateri tidak mengecas', sub: 'Notifikasi bila solar aktif tapi bateri tak naik' },
+  { key: 'risiko_overflow', label: 'Risiko hujan lebat + tangki tinggi', sub: 'Notifikasi bila risiko tangki melimpah' },
+]
+
 const NAV_MAIN = [
   { id: 'dashboard', icon: 'ti-layout-dashboard', label: 'Tangki Saya' },
   { id: 'history', icon: 'ti-history', label: 'Sejarah Data' },
@@ -52,31 +72,37 @@ export default function UserDashboard() {
   const [readings, setReadings] = useState([])
   const [weather, setWeather] = useState([])
   const [weatherLoading, setWeatherLoading] = useState(false)
+  const [alerts, setAlerts] = useState([])
+  const [notifPrefs, setNotifPrefs] = useState(null)
+  const [bellOpen, setBellOpen] = useState(false)
+  const [userId, setUserId] = useState(null)
 
   useEffect(() => {
-    let channel
+    let sensorChannel, alertChannel
 
     const load = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoading(false); return }
+      setUserId(user.id)
 
-      const [{ data: profileData }, { data: unitData }] = await Promise.all([
+      const [{ data: profileData }, { data: unitData }, { data: prefsData }] = await Promise.all([
         supabase.from('profiles').select('full_name, email').eq('id', user.id).single(),
         supabase.from('units').select('*').eq('owner_id', user.id).single(),
+        supabase.from('notification_preferences').select('*').eq('user_id', user.id).single(),
       ])
       setProfile(profileData)
       setUnit(unitData)
+      setNotifPrefs(prefsData)
 
       if (unitData) {
-        const { data: readingData } = await supabase
-          .from('sensor_data')
-          .select('*')
-          .eq('unit_id', unitData.id)
-          .order('created_at', { ascending: false })
-          .limit(50)
+        const [{ data: readingData }, { data: alertData }] = await Promise.all([
+          supabase.from('sensor_data').select('*').eq('unit_id', unitData.id).order('created_at', { ascending: false }).limit(50),
+          supabase.from('alert_state').select('*').eq('unit_id', unitData.id).eq('is_active', true),
+        ])
         setReadings(readingData || [])
+        setAlerts(alertData || [])
 
-        channel = supabase
+        sensorChannel = supabase
           .channel(`sensor_data_${unitData.id}`)
           .on('postgres_changes', {
             event: 'INSERT', schema: 'public', table: 'sensor_data',
@@ -85,13 +111,36 @@ export default function UserDashboard() {
             setReadings(prev => [payload.new, ...prev].slice(0, 50))
           })
           .subscribe()
+
+        alertChannel = supabase
+          .channel(`alert_state_${unitData.id}`)
+          .on('postgres_changes', {
+            event: '*', schema: 'public', table: 'alert_state',
+            filter: `unit_id=eq.${unitData.id}`,
+          }, (payload) => {
+            setAlerts(prev => {
+              const withoutThis = prev.filter(a => a.id !== payload.new.id)
+              return payload.new.is_active ? [...withoutThis, payload.new] : withoutThis
+            })
+          })
+          .subscribe()
       }
       setLoading(false)
     }
     load()
 
-    return () => { if (channel) supabase.removeChannel(channel) }
+    return () => {
+      if (sensorChannel) supabase.removeChannel(sensorChannel)
+      if (alertChannel) supabase.removeChannel(alertChannel)
+    }
   }, [])
+
+  const toggleNotifPref = async (key) => {
+    const current = notifPrefs ? notifPrefs[key] : true
+    const next = { ...(notifPrefs || {}), user_id: userId, [key]: !current }
+    setNotifPrefs(next)
+    await supabase.from('notification_preferences').upsert(next, { onConflict: 'user_id' })
+  }
 
   useEffect(() => {
     if (unit?.lokasi_lat == null || unit?.lokasi_lon == null) return
@@ -179,6 +228,13 @@ export default function UserDashboard() {
         .topbar-icon-btn { position: relative; width: 38px; height: 38px; border-radius: 50%; background: #fff; border: 1px solid #F0E9DA; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #6B6355; box-shadow: 0 2px 10px rgba(60,45,20,0.03); }
         .topbar-badge { position: absolute; top: -3px; right: -3px; background: #1D9E75; color: #fff; font-size: 9px; font-weight: 700; border-radius: 999px; padding: 1px 5px; min-width: 15px; text-align: center; border: 2px solid #FBF6EE; }
         .topbar-avatar { width: 38px; height: 38px; border-radius: 50%; background: #DCF2E7; color: #0F3B2C; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+
+        .notif-wrap { position: relative; }
+        .notif-panel { position: absolute; top: 46px; right: 0; width: 320px; max-width: calc(100vw - 32px); background: #fff; border: 1px solid #F0E9DA; border-radius: 16px; box-shadow: 0 12px 34px rgba(60,45,20,0.12); z-index: 60; overflow: hidden; }
+        .notif-panel-title { font-size: 12px; font-weight: 700; color: #8A8578; text-transform: uppercase; letter-spacing: 0.05em; padding: 14px 16px 10px; }
+        .notif-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-top: 1px solid #F5F0E5; font-size: 13px; color: #171D19; }
+        .notif-item-icon { font-size: 16px; flex-shrink: 0; }
+        .notif-empty { padding: 20px 16px; text-align: center; color: #A6A093; font-size: 13px; }
 
         .page-header { margin-bottom: 22px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
         .page-title { font-size: 24px; font-weight: 700; color: #171D19; letter-spacing: -0.5px; margin-bottom: 4px; }
@@ -375,10 +431,27 @@ export default function UserDashboard() {
             <input placeholder="Cari dalam log data..." />
           </div>
           <div className="topbar-actions">
-            <button className="topbar-icon-btn" title="Notifikasi">
-              <i className="ti ti-bell" aria-hidden="true" />
-              <span className="topbar-badge">1</span>
-            </button>
+            <div className="notif-wrap">
+              <button className="topbar-icon-btn" title="Notifikasi" onClick={() => setBellOpen(o => !o)}>
+                <i className="ti ti-bell" aria-hidden="true" />
+                {alerts.length > 0 && <span className="topbar-badge">{alerts.length}</span>}
+              </button>
+              {bellOpen && (
+                <div className="notif-panel">
+                  <div className="notif-panel-title">Notifikasi Aktif</div>
+                  {alerts.length === 0 && <div className="notif-empty">Tiada isu buat masa ini 👍</div>}
+                  {alerts.map(a => {
+                    const info = ALERT_LABELS[a.alert_type] || { label: a.alert_type, icon: '🔔' }
+                    return (
+                      <div key={a.id} className="notif-item">
+                        <span className="notif-item-icon">{info.icon}</span>
+                        <span>{info.label}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
             <div className="topbar-avatar">{nameInitial}</div>
           </div>
         </div>
@@ -707,21 +780,19 @@ export default function UserDashboard() {
 
             <div className="section-card" style={{ marginBottom: 16 }}>
               <div className="settings-section">
-                <div className="settings-title">Notifikasi</div>
-                {[
-                  { label: 'Tangki hampir penuh', sub: 'Notifikasi bila paras air melebihi 90%', on: true },
-                  { label: 'Tangki hampir kosong', sub: 'Notifikasi bila paras air kurang dari 20%', on: true },
-                  { label: 'WiFi terputus', sub: 'Notifikasi bila unit tidak dalam talian', on: true },
-                  { label: 'Ramalan hujan lebat', sub: 'Notifikasi bila hujan lebat dijangka', on: false },
-                ].map((r, i) => (
-                  <div key={i} className="settings-row">
-                    <div>
-                      <div className="settings-label">{r.label}</div>
-                      <div className="settings-sub">{r.sub}</div>
+                <div className="settings-title">Notifikasi Emel</div>
+                {NOTIF_TOGGLES.map((r) => {
+                  const isOn = notifPrefs ? notifPrefs[r.key] !== false : true
+                  return (
+                    <div key={r.key} className="settings-row">
+                      <div>
+                        <div className="settings-label">{r.label}</div>
+                        <div className="settings-sub">{r.sub}</div>
+                      </div>
+                      <button className={`toggle${isOn ? '' : ' off'}`} onClick={() => toggleNotifPref(r.key)} />
                     </div>
-                    <button className={`toggle${r.on ? '' : ' off'}`} />
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
 
