@@ -1,8 +1,118 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 const ONLINE_THRESHOLD_MIN = 15 // unit upload setiap 5 min — anggap offline lepas 3 pusingan terlepas
+
+// Anggaran lalai untuk model ramalan AI (boleh dilaraskan ikut unit sebenar kelak
+// melalui units.kawasan_tadahan_m2 / units.pekali_larian)
+const DEFAULT_CATCHMENT_M2 = 20      // kawasan tadahan bumbung (meter persegi)
+const DEFAULT_RUNOFF_COEFF = 0.85    // pekali larian air (0–1)
+const MIN_HISTORY_HOURS_FOR_CONSUMPTION = 12 // sejarah minimum sebelum anggaran penggunaan air dipercayai
+
+// Anggarkan penggunaan air harian (L/hari) daripada penurunan aras dalam sejarah bacaan.
+// Pulangkan null jika sejarah tidak mencukupi — supaya UI jujur bila anggaran tidak boleh dipercayai.
+function estimateDailyWithdrawalLiters(readings) {
+  const valid = readings
+    .filter(r => r.paras_air_liter != null && r.paras_air_liter >= 0)
+    .slice()
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+  if (valid.length < 2) return null
+  const spanMs = new Date(valid[valid.length - 1].created_at) - new Date(valid[0].created_at)
+  const spanHours = spanMs / 3600000
+  if (spanHours < MIN_HISTORY_HOURS_FOR_CONSUMPTION) return null
+  let totalDrop = 0
+  for (let i = 1; i < valid.length; i++) {
+    const diff = valid[i - 1].paras_air_liter - valid[i].paras_air_liter
+    if (diff > 0) totalDrop += diff // hanya kira penurunan (penggunaan); kenaikan = hujan/pengisian
+  }
+  return totalDrop / (spanHours / 24)
+}
+
+// Ramalan paras tangki 7 hari menggunakan anggaran fizikal (langkah S5 dalam draf paten):
+// jangkaan air masuk = k0 x hujan ramalan, k0 = kawasan tadahan x pekali larian.
+// Ini digunakan kerana sejarah hujan tangki masih tidak mencukupi untuk latih model
+// pembelajaran tempatan (langkah S6) — lihat AI Forecasting Addendum.
+function buildTankForecast({ weather, currentLiters, capacityLiters, k0, dailyWithdrawal }) {
+  if (!weather || weather.length === 0 || currentLiters == null || !capacityLiters) return null
+  let level = currentLiters
+  let daysUntilEmpty = null
+  let overflowDay = null
+  const days = weather.map((w, i) => {
+    const inflow = k0 * (w.hujanMm || 0)
+    const withdrawal = dailyWithdrawal ?? 0
+    let next = level + inflow - withdrawal
+    const overflowLiters = Math.max(0, next - capacityLiters)
+    if (overflowLiters > 0 && overflowDay === null) overflowDay = w.hari
+    next = Math.min(capacityLiters, Math.max(0, next))
+    if (next <= 0 && daysUntilEmpty === null) daysUntilEmpty = i + 1
+    const point = {
+      hari: w.hari, date: w.date, hujanMm: w.hujanMm,
+      inflow, withdrawal, level: next, pct: (next / capacityLiters) * 100, overflowLiters,
+    }
+    level = next
+    return point
+  })
+  return {
+    days,
+    predictedLevelPct: days[days.length - 1].pct,
+    totalInflow: days.reduce((s, d) => s + d.inflow, 0),
+    overflowDay,
+    daysUntilEmpty,
+  }
+}
+
+const DEFAULT_TARIFF_PER_M3 = 2.00   // RM/m3 — anggaran lalai, belum dikonfigurasikan ikut kadar sebenar
+const MIN_DISTINCT_DAYS_FOR_SAVINGS = 5 // sejarah minimum (hari berlainan dengan bacaan sah) sebelum graf penjimatan dipercayai
+const MONTH_NAMES_MS = ['Jan', 'Feb', 'Mac', 'Apr', 'Mei', 'Jun', 'Jul', 'Ogo', 'Sep', 'Okt', 'Nov', 'Dis']
+
+// Data contoh untuk pratonton (label jelas dalam UI) — sama dengan angka dalam
+// AI Forecasting Addendum Figure 8, digunakan hanya bila sejarah sebenar tidak mencukupi.
+const DEMO_SAVINGS_MONTHS = [
+  { label: 'Apr', harvestedM3: 3.2, suppliedM3: 2.6 },
+  { label: 'Mei', harvestedM3: 4.1, suppliedM3: 3.4 },
+  { label: 'Jun', harvestedM3: 3.6, suppliedM3: 3.1 },
+  { label: 'Jul', harvestedM3: 4.4, suppliedM3: 3.6 },
+  { label: 'Ogo', harvestedM3: 5.0, suppliedM3: 3.0 },
+  { label: 'Sep', harvestedM3: 4.6, suppliedM3: 2.7 },
+]
+const DEMO_OVERFLOW_EVENTS = 6
+
+// Kira penjimatan air bulanan (langkah S10 dalam draf paten) daripada sejarah bacaan sensor sebenar:
+// air dibekalkan = jumlah penurunan aras (penggunaan), air dituai = jumlah kenaikan aras (hujan/pengisian).
+// Risiko melimpah dianggarkan secara kualitatif sahaja (hujan dikesan ketika tangki >=95% penuh),
+// kerana sensor aras tidak dapat merekod isipadu sebenar yang melimpah keluar dari tangki.
+function computeWaterSavings(allReadings, capacityLiters) {
+  const valid = (allReadings || [])
+    .filter(r => r.paras_air_liter != null && r.paras_air_liter >= 0)
+    .slice()
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+
+  const distinctDays = new Set(valid.map(r => r.created_at.slice(0, 10))).size
+  const sufficientData = valid.length >= 10 && distinctDays >= MIN_DISTINCT_DAYS_FOR_SAVINGS
+  if (!sufficientData) return { sufficientData: false, distinctDays, validCount: valid.length }
+
+  const byMonth = new Map() // 'YYYY-MM' -> { harvestedL, suppliedL }
+  for (let i = 1; i < valid.length; i++) {
+    const diff = valid[i].paras_air_liter - valid[i - 1].paras_air_liter
+    const monthKey = valid[i].created_at.slice(0, 7)
+    if (!byMonth.has(monthKey)) byMonth.set(monthKey, { harvestedL: 0, suppliedL: 0 })
+    const m = byMonth.get(monthKey)
+    if (diff > 0) m.harvestedL += diff
+    else if (diff < 0) m.suppliedL += -diff
+  }
+  const months = [...byMonth.entries()].sort().map(([key, v]) => ({
+    label: MONTH_NAMES_MS[Number(key.slice(5, 7)) - 1],
+    harvestedM3: v.harvestedL / 1000,
+    suppliedM3: v.suppliedL / 1000,
+  }))
+
+  const overflowRiskEvents = capacityLiters
+    ? (allReadings || []).filter(r => r.hujan_status && r.paras_air_pct >= 95).length
+    : 0
+
+  return { sufficientData: true, months, overflowRiskEvents }
+}
 
 function formatRelativeTime(iso) {
   if (!iso) return 'tiada data'
@@ -53,6 +163,8 @@ const NOTIF_TOGGLES = [
 
 const NAV_MAIN = [
   { id: 'dashboard', icon: 'ti-layout-dashboard', label: 'Tangki Saya' },
+  { id: 'ai_forecast', icon: 'ti-chart-line', label: 'Ramalan AI' },
+  { id: 'water_savings', icon: 'ti-leaf', label: 'Penjimatan Air' },
   { id: 'history', icon: 'ti-history', label: 'Sejarah Data' },
   { id: 'weather', icon: 'ti-cloud', label: 'Cuaca' },
 ]
@@ -76,6 +188,10 @@ export default function UserDashboard() {
   const [notifPrefs, setNotifPrefs] = useState(null)
   const [bellOpen, setBellOpen] = useState(false)
   const [userId, setUserId] = useState(null)
+  const [fullHistory, setFullHistory] = useState(null)       // sejarah penuh (bukan had 50) — dimuat lazily untuk tab Penjimatan Air
+  const [fullHistoryLoading, setFullHistoryLoading] = useState(false)
+  const [tariffPerM3, setTariffPerM3] = useState(DEFAULT_TARIFF_PER_M3)
+  const [savingsDemoOn, setSavingsDemoOn] = useState(false)
 
   useEffect(() => {
     let sensorChannel, alertChannel
@@ -164,6 +280,17 @@ export default function UserDashboard() {
       .finally(() => setWeatherLoading(false))
   }, [unit?.lokasi_lat, unit?.lokasi_lon])
 
+  // Muat sejarah PENUH (bukan had 50 terkini) sekali sahaja apabila tab Penjimatan Air dibuka —
+  // pengiraan bulanan perlu rentang masa lebih panjang daripada log terkini di dashboard utama.
+  useEffect(() => {
+    if (activeTab !== 'water_savings' || !unit?.id || fullHistory != null || fullHistoryLoading) return
+    setFullHistoryLoading(true)
+    supabase.from('sensor_data').select('created_at, paras_air_liter, paras_air_pct, hujan_status')
+      .eq('unit_id', unit.id).order('created_at', { ascending: true })
+      .then(({ data }) => setFullHistory(data || []))
+      .finally(() => setFullHistoryLoading(false))
+  }, [activeTab, unit?.id, fullHistory, fullHistoryLoading])
+
   const latest = readings[0] || null
   const isOnline = latest ? (Date.now() - new Date(latest.created_at).getTime()) / 60000 < ONLINE_THRESHOLD_MIN : false
   const paras = latest && latest.paras_air_pct >= 0 ? Math.round(latest.paras_air_pct) : null
@@ -180,6 +307,32 @@ export default function UserDashboard() {
   const tankFillPct = paras ?? 0
   const tankFillHeight = (tankFillPct / 100) * 86
   const tankFillY = 8 + (86 - tankFillHeight)
+
+  // ── Ramalan AI: anggaran fizikal k0 = kawasan tadahan x pekali larian ──
+  const k0 = (unit?.kawasan_tadahan_m2 ?? DEFAULT_CATCHMENT_M2) * (unit?.pekali_larian ?? DEFAULT_RUNOFF_COEFF)
+  const usingDefaultCatchment = unit?.kawasan_tadahan_m2 == null || unit?.pekali_larian == null
+  const dailyWithdrawal = useMemo(() => estimateDailyWithdrawalLiters(readings), [readings])
+  const [demoPreviewPct, setDemoPreviewPct] = useState(55)
+  const [demoPreviewOn, setDemoPreviewOn] = useState(false)
+  const usingDemoLevel = parasLiter == null && demoPreviewOn
+  const forecastCurrentLiters = usingDemoLevel ? (demoPreviewPct / 100) * (kapasiti || 0) : parasLiter
+  const forecast = useMemo(() => buildTankForecast({
+    weather, currentLiters: forecastCurrentLiters, capacityLiters: kapasiti, k0, dailyWithdrawal,
+  }), [weather, forecastCurrentLiters, kapasiti, k0, dailyWithdrawal])
+  // "hari ini" ialah hari semasa, bukan hari akan datang — elak "menjelang hari ini" yang janggal
+  const overflowWhenText = forecast?.overflowDay
+    ? (forecast.overflowDay === 'Hari ini' ? 'hari ini' : `menjelang ${forecast.overflowDay}`)
+    : null
+
+  // ── Penjimatan Air: kira daripada sejarah sebenar; guna data contoh (dilabel jelas) jika tidak mencukupi ──
+  const realSavings = useMemo(() => computeWaterSavings(fullHistory, kapasiti), [fullHistory, kapasiti])
+  const showSavingsDemo = realSavings.sufficientData === false && savingsDemoOn
+  const savingsMonths = showSavingsDemo ? DEMO_SAVINGS_MONTHS : (realSavings.months || [])
+  const savingsOverflowEvents = showSavingsDemo ? DEMO_OVERFLOW_EVENTS : (realSavings.overflowRiskEvents || 0)
+  const savingsTotals = savingsMonths.reduce((acc, m) => ({
+    harvestedM3: acc.harvestedM3 + m.harvestedM3, suppliedM3: acc.suppliedM3 + m.suppliedM3,
+  }), { harvestedM3: 0, suppliedM3: 0 })
+  const savingsCostAvoided = savingsTotals.suppliedM3 * tariffPerM3
 
   return (
     <div style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%', background: '#FBF6EE', color: '#1D2420' }}>
@@ -403,9 +556,15 @@ export default function UserDashboard() {
         ))}
 
         <div className="sidebar-tip">
-          <div className="sidebar-tip-icon">☔</div>
-          <div className="sidebar-tip-text">Hujan lebat dijangka esok — tangki anda akan penuh lebih cepat, semak paras air kerap.</div>
-          <div className="sidebar-tip-label">Tip Cuaca</div>
+          <div className="sidebar-tip-icon">{forecast?.overflowDay ? '☔' : '🤖'}</div>
+          <div className="sidebar-tip-text">
+            {forecast?.overflowDay
+              ? `Ramalan AI: hujan lebat ${overflowWhenText} — tangki berisiko melimpah, guna air simpanan dahulu.`
+              : forecast
+                ? `Ramalan AI: paras tangki dijangka ${Math.round(forecast.predictedLevelPct)}% dalam 7 hari.`
+                : 'Ramalan AI tersedia sebaik unit anda mempunyai bacaan dan lokasi cuaca.'}
+          </div>
+          <div className="sidebar-tip-label">Ramalan AI</div>
         </div>
 
         <div className="sidebar-bottom">
@@ -592,6 +751,288 @@ export default function UserDashboard() {
                 </div>
               )}
             </div>
+          </>
+        )}
+
+        {/* RAMALAN AI */}
+        {activeTab === 'ai_forecast' && (
+          <>
+            <div className="page-header">
+              <div>
+                <div className="page-title">Ramalan AI</div>
+                <div className="page-sub">{unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Anggaran paras tangki 7 hari</div>
+              </div>
+              <div className="online-badge" style={{ background: '#F0EADC', color: '#8A8578' }}>
+                <i className="ti ti-atom-2" aria-hidden="true" /> Anggaran fizikal (belum cukup data hujan untuk model latihan)
+              </div>
+            </div>
+
+            {(!unit || kapasiti == null) && (
+              <div className="section-card" style={{ marginBottom: 16 }}>Unit belum lengkap didaftarkan (tiada kapasiti tangki) — ramalan tidak tersedia.</div>
+            )}
+            {unit && kapasiti != null && weather.length === 0 && (
+              <div className="section-card" style={{ marginBottom: 16 }}>Tiada koordinat lokasi untuk unit ini — ramalan hujan tidak tersedia, jadi ramalan paras tangki tidak dapat dikira.</div>
+            )}
+            {unit && kapasiti != null && weather.length > 0 && parasLiter == null && !demoPreviewOn && (
+              <div className="section-card" style={{ marginBottom: 16, borderLeft: '4px solid #C23A39' }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Sensor paras air unit ini sedang gagal baca</div>
+                <div style={{ fontSize: 13, color: '#4A463C', marginBottom: 14 }}>
+                  Bacaan terkini kembali -1 (gagal), jadi ramalan tidak boleh dikira daripada paras sebenar sekarang. Ini isu perkakasan lapangan, bukan ciri ramalan itu sendiri — sila semak sambungan sensor ultrasonik unit.
+                  Untuk keperluan pembentangan hari ini, anda boleh guna pratonton dengan paras anggapan (dilabel jelas sebagai contoh):
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <input type="range" min="0" max="100" value={demoPreviewPct} onChange={e => setDemoPreviewPct(Number(e.target.value))} style={{ width: 200 }} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Anggap paras semasa: {demoPreviewPct}%</span>
+                  <button className="btn-save" onClick={() => setDemoPreviewOn(true)}>Aktifkan Pratonton</button>
+                </div>
+              </div>
+            )}
+
+            {usingDemoLevel && (
+              <div className="section-card" style={{ marginBottom: 16, background: '#FDF0DC', borderLeft: '4px solid #B87710' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <b>🔶 MOD PRATONTON</b> — paras tangki dianggap <b>{demoPreviewPct}%</b> untuk demo kerana sensor sebenar tiada bacaan sah. Angka di bawah bukan daripada sensor.
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <input type="range" min="0" max="100" value={demoPreviewPct} onChange={e => setDemoPreviewPct(Number(e.target.value))} style={{ width: 160 }} />
+                    <button className="btn-danger" onClick={() => setDemoPreviewOn(false)}>Tutup Pratonton</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {forecast && (
+              <>
+                <div className="metrics-grid">
+                  <div className="metric-card metric-hero">
+                    <div className="metric-icon-chip chip-hero"><i className="ti ti-chart-line" aria-hidden="true" /></div>
+                    <div className="metric-label">Paras Dijangka (7 hari)</div>
+                    <div className="metric-val">{Math.round(forecast.predictedLevelPct)}%</div>
+                    <div className="metric-unit">daripada kapasiti {kapasiti.toLocaleString('ms-MY')} L</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-icon-chip chip-blue"><i className="ti ti-alert-triangle" aria-hidden="true" /></div>
+                    <div className="metric-label">Risiko Melimpah</div>
+                    <div className="metric-val" style={{ fontSize: 22 }}>{forecast.overflowDay ? forecast.overflowDay : 'Tiada'}</div>
+                    <div className="metric-unit">dalam tempoh 7 hari</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-icon-chip chip-amber"><i className="ti ti-droplet-off" aria-hidden="true" /></div>
+                    <div className="metric-label">Anggaran Kosong</div>
+                    <div className="metric-val" style={{ fontSize: dailyWithdrawal == null ? 14 : 22 }}>
+                      {dailyWithdrawal == null ? 'Tiada anggaran' : forecast.daysUntilEmpty ? `${forecast.daysUntilEmpty} hari` : '> 7 hari'}
+                    </div>
+                    <div className="metric-unit">{dailyWithdrawal == null ? 'sejarah penggunaan belum cukup' : `~${Math.round(dailyWithdrawal)} L/hari digunakan`}</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-icon-chip chip-green"><i className="ti ti-cloud-rain" aria-hidden="true" /></div>
+                    <div className="metric-label">Jangkaan Air Masuk</div>
+                    <div className="metric-val">{Math.round(forecast.totalInflow).toLocaleString('ms-MY')}</div>
+                    <div className="metric-unit">liter, 7 hari akan datang</div>
+                  </div>
+                </div>
+
+                <div className="two-col">
+                  <div className="section-card">
+                    <div className="section-title"><i className="ti ti-cloud-rain" aria-hidden="true" /> Hujan Ramalan (mm)</div>
+                    <div className="weather-scroll">
+                      {forecast.days.map((d, i) => (
+                        <div key={d.date} className={`weather-day${i === 0 ? ' today' : ''}`}>
+                          <div className="weather-day-name">{d.hari}</div>
+                          <div style={{ height: 60, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 6 }}>
+                            <div style={{
+                              width: 14, borderRadius: 4, background: '#2E71C2',
+                              height: `${Math.max(3, Math.min(60, (d.hujanMm / Math.max(10, ...forecast.days.map(x => x.hujanMm))) * 60))}px`,
+                            }} />
+                          </div>
+                          <div className="weather-day-rain">{Math.round(d.hujanMm)}mm</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="section-card">
+                    <div className="section-title"><i className="ti ti-container" aria-hidden="true" /> Paras Tangki Dijangka</div>
+                    <svg viewBox="0 0 460 190" width="100%" height="190" style={{ overflow: 'visible' }}>
+                      <line x1="30" y1="10" x2="30" y2="150" stroke="#F0EADC" strokeWidth="1" />
+                      <line x1="30" y1="150" x2="450" y2="150" stroke="#E3DAC4" strokeWidth="1.2" />
+                      <line x1="30" y1={150 - 1.0 * 140} x2="450" y2={150 - 1.0 * 140} stroke="#E3DAC4" strokeWidth="1" strokeDasharray="4 4" />
+                      <text x="452" y={150 - 1.0 * 140 + 4} fontSize="9" fill="#A6A093">100%</text>
+                      <line x1="30" y1={150 - 0.2 * 140} x2="450" y2={150 - 0.2 * 140} stroke="#D9827A" strokeWidth="1" strokeDasharray="2 3" />
+                      <text x="452" y={150 - 0.2 * 140 + 4} fontSize="9" fill="#C23A39">20%</text>
+                      {(() => {
+                        const pts = [{ pct: paras ?? 0 }, ...forecast.days.map(d => ({ pct: d.pct }))]
+                        const n = pts.length - 1
+                        const xAt = (i) => 30 + (i / n) * 420
+                        const yAt = (pct) => 150 - Math.max(0, Math.min(100, pct)) / 100 * 140
+                        const linePts = pts.map((p, i) => `${xAt(i)},${yAt(p.pct)}`).join(' ')
+                        const areaPts = `30,150 ${linePts} 450,150`
+                        return (
+                          <>
+                            <polygon points={areaPts} fill="#1D9E75" fillOpacity="0.12" />
+                            <polyline points={linePts} fill="none" stroke="#1D9E75" strokeWidth="2.4" />
+                            {pts.map((p, i) => <circle key={i} cx={xAt(i)} cy={yAt(p.pct)} r="3.2" fill="#178763" />)}
+                          </>
+                        )
+                      })()}
+                      <text x="30" y="168" fontSize="9" fill="#A6A093">Sekarang</text>
+                      {forecast.days.map((d, i) => (
+                        <text key={d.date} x={30 + ((i + 1) / forecast.days.length) * 420} y="168" fontSize="9" fill="#A6A093" textAnchor="middle">{d.hari.slice(0, 3)}</text>
+                      ))}
+                    </svg>
+                  </div>
+                </div>
+
+                <div className="section-card">
+                  <div className="section-title"><i className="ti ti-bulb" aria-hidden="true" /> Cadangan</div>
+                  <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {forecast.overflowDay && (
+                      <li style={{ fontSize: 13, color: '#171D19', paddingBottom: 10, borderBottom: '1px solid #F5F0E5' }}>
+                        🌧️ Hujan lebat dijangka <b>{overflowWhenText}</b> — tangki berisiko melimpah. Guna air simpanan lebih awal untuk kurangkan pembaziran.
+                      </li>
+                    )}
+                    {dailyWithdrawal != null && forecast.daysUntilEmpty && (
+                      <li style={{ fontSize: 13, color: '#171D19', paddingBottom: 10, borderBottom: '1px solid #F5F0E5' }}>
+                        💧 Pada kadar penggunaan semasa, air simpanan dijangka <b>kosong dalam {forecast.daysUntilEmpty} hari</b> jika hujan tidak mencukupi.
+                      </li>
+                    )}
+                    {!forecast.overflowDay && (!forecast.daysUntilEmpty || dailyWithdrawal == null) && (
+                      <li style={{ fontSize: 13, color: '#171D19', paddingBottom: 10, borderBottom: '1px solid #F5F0E5' }}>
+                        ✅ Tiada risiko melimpah atau kehabisan air dijangka dalam 7 hari akan datang.
+                      </li>
+                    )}
+                    {dailyWithdrawal == null && (
+                      <li style={{ fontSize: 13, color: '#8A8578', paddingBottom: 10, borderBottom: '1px solid #F5F0E5' }}>
+                        ℹ️ Sejarah penggunaan air unit ini belum mencukupi ({MIN_HISTORY_HOURS_FOR_CONSUMPTION} jam minimum) — anggaran di atas menganggap tiada air digunakan.
+                      </li>
+                    )}
+                    <li style={{ fontSize: 13, color: '#8A8578' }}>
+                      ⚙️ Anggaran guna k0 = {k0.toFixed(1)} L per mm hujan ({usingDefaultCatchment ? 'nilai lalai — belum dikonfigurasikan untuk unit ini' : 'ditetapkan untuk unit ini'}). Ramalan akan bertambah tepat apabila lebih banyak sejarah hujan direkod oleh sensor unit.
+                    </li>
+                  </ul>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {/* PENJIMATAN AIR */}
+        {activeTab === 'water_savings' && (
+          <>
+            <div className="page-header">
+              <div>
+                <div className="page-title">Penjimatan Air</div>
+                <div className="page-sub">{unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Dikira daripada sejarah bacaan sensor</div>
+              </div>
+              {showSavingsDemo && (
+                <div className="online-badge" style={{ background: '#FDF0DC', color: '#B87710' }}>
+                  <i className="ti ti-flask" aria-hidden="true" /> Mod Pratonton — data contoh
+                </div>
+              )}
+            </div>
+
+            {fullHistoryLoading && <div className="section-card" style={{ marginBottom: 16 }}>Memuatkan sejarah penuh...</div>}
+
+            {!fullHistoryLoading && realSavings.sufficientData === false && !savingsDemoOn && (
+              <div className="section-card" style={{ marginBottom: 16, borderLeft: '4px solid #C23A39' }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Sejarah bacaan sah belum mencukupi untuk kira penjimatan sebenar</div>
+                <div style={{ fontSize: 13, color: '#4A463C', marginBottom: 14 }}>
+                  Unit ini baru ada bacaan aras sah pada {realSavings.distinctDays ?? 0} hari berlainan (perlu sekurang-kurangnya {MIN_DISTINCT_DAYS_FOR_SAVINGS} hari). Ini konsisten dengan status sensor semasa — lihat amaran di tab Ramalan AI.
+                  Untuk keperluan pembentangan hari ini, anda boleh guna pratonton dengan data contoh (dilabel jelas, bukan daripada sensor):
+                </div>
+                <button className="btn-save" onClick={() => setSavingsDemoOn(true)}>Aktifkan Pratonton Data Contoh</button>
+              </div>
+            )}
+
+            {showSavingsDemo && (
+              <div className="section-card" style={{ marginBottom: 16, background: '#FDF0DC', borderLeft: '4px solid #B87710' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div>🔶 <b>MOD PRATONTON</b> — graf dan angka di bawah data contoh untuk tujuan demo, bukan daripada sensor sebenar.</div>
+                  <button className="btn-danger" onClick={() => setSavingsDemoOn(false)}>Tutup Pratonton</button>
+                </div>
+              </div>
+            )}
+
+            {savingsMonths.length > 0 && (
+              <>
+                <div className="metrics-grid">
+                  <div className="metric-card metric-hero">
+                    <div className="metric-icon-chip chip-hero"><i className="ti ti-droplet" aria-hidden="true" /></div>
+                    <div className="metric-label">Air Dibekalkan</div>
+                    <div className="metric-val">{savingsTotals.suppliedM3.toFixed(1)} m³</div>
+                    <div className="metric-unit">menggantikan air paip terawat</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-icon-chip chip-green"><i className="ti ti-coin" aria-hidden="true" /></div>
+                    <div className="metric-label">Kos Air Dielakkan</div>
+                    <div className="metric-val" style={{ fontSize: 22 }}>RM {savingsCostAvoided.toFixed(2)}</div>
+                    <div className="metric-unit">
+                      pada RM <input type="number" step="0.10" min="0" value={tariffPerM3}
+                        onChange={e => setTariffPerM3(Math.max(0, Number(e.target.value)))}
+                        style={{ width: 54, border: '1px solid #E3DAC4', borderRadius: 6, padding: '1px 4px', font: 'inherit' }} />/m³ (boleh ubah)
+                    </div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-icon-chip chip-blue"><i className="ti ti-cloud-rain" aria-hidden="true" /></div>
+                    <div className="metric-label">Air Dituai</div>
+                    <div className="metric-val">{savingsTotals.harvestedM3.toFixed(1)} m³</div>
+                    <div className="metric-unit">jumlah kenaikan aras (hujan)</div>
+                  </div>
+                  <div className="metric-card">
+                    <div className="metric-icon-chip chip-amber"><i className="ti ti-alert-triangle" aria-hidden="true" /></div>
+                    <div className="metric-label">Risiko Melimpah</div>
+                    <div className="metric-val">{savingsOverflowEvents}</div>
+                    <div className="metric-unit">bacaan hujan ketika tangki ≥95% penuh</div>
+                  </div>
+                </div>
+
+                <div className="section-card" style={{ marginBottom: 16 }}>
+                  <div className="section-title"><i className="ti ti-chart-bar" aria-hidden="true" /> Air Dituai vs Dibekalkan Setiap Bulan (m³)</div>
+                  <svg viewBox={`0 0 ${Math.max(460, savingsMonths.length * 70)} 200`} width="100%" height="200" style={{ overflow: 'visible' }}>
+                    {(() => {
+                      const w = Math.max(460, savingsMonths.length * 70)
+                      const x0 = 30, x1 = w - 10, y0 = 10, y1 = 150
+                      const maxV = Math.max(1, ...savingsMonths.flatMap(m => [m.harvestedM3, m.suppliedM3]))
+                      const yAt = (v) => y1 - (v / maxV) * (y1 - y0)
+                      const slot = (x1 - x0) / savingsMonths.length
+                      return (
+                        <>
+                          <line x1={x0} y1={y1} x2={x1} y2={y1} stroke="#E3DAC4" strokeWidth="1.2" />
+                          {savingsMonths.map((m, i) => {
+                            const gx = x0 + i * slot + slot * 0.2
+                            const bw = slot * 0.28
+                            return (
+                              <g key={m.label + i}>
+                                <rect x={gx} y={yAt(m.harvestedM3)} width={bw} height={y1 - yAt(m.harvestedM3)} fill="#1D9E75" rx="2" />
+                                <rect x={gx + bw + 6} y={yAt(m.suppliedM3)} width={bw} height={y1 - yAt(m.suppliedM3)} fill="#2E71C2" rx="2" />
+                                <text x={gx + bw + 3} y={y1 + 18} fontSize="10" fill="#8A8578" textAnchor="middle">{m.label}</text>
+                              </g>
+                            )
+                          })}
+                        </>
+                      )
+                    })()}
+                  </svg>
+                  <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#8A8578', marginTop: 4 }}>
+                    <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#1D9E75', borderRadius: 2, marginRight: 4 }} />Dituai</span>
+                    <span><span style={{ display: 'inline-block', width: 10, height: 10, background: '#2E71C2', borderRadius: 2, marginRight: 4 }} />Dibekalkan</span>
+                  </div>
+                </div>
+
+                <div className="section-card">
+                  <div className="section-title"><i className="ti ti-container" aria-hidden="true" /> Cadangan Kapasiti Tangki</div>
+                  {savingsOverflowEvents > 0 ? (
+                    <div style={{ fontSize: 13, color: '#171D19' }}>
+                      🪣 {savingsOverflowEvents} bacaan hujan direkod ketika tangki sudah ≥95% penuh — ini menunjukkan air berpotensi melimpah dan terbuang.
+                      Pertimbangkan menyambung tangki tambahan (unit ini menyokong sehingga 3 tangki bagi satu modul sistem) untuk simpan lebih banyak air hujan.
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: '#171D19' }}>✅ Tiada risiko melimpah direkod dalam tempoh ini.</div>
+                  )}
+                </div>
+              </>
+            )}
           </>
         )}
 
