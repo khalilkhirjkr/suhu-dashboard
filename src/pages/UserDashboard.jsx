@@ -314,6 +314,11 @@ export default function UserDashboard() {
   const dailyWithdrawal = useMemo(() => estimateDailyWithdrawalLiters(readings), [readings])
   const [demoPreviewPct, setDemoPreviewPct] = useState(55)
   const [demoPreviewOn, setDemoPreviewOn] = useState(false)
+  // Auto-hidupkan pratonton (sekali sahaja selepas data sebenar selesai dimuat) supaya dashboard terus
+  // berfungsi tanpa perlu klik — pengguna masih boleh tutup secara manual melalui "Tutup Pratonton".
+  useEffect(() => {
+    if (!loading && unit && parasLiter == null) setDemoPreviewOn(true)
+  }, [loading, unit, parasLiter])
   const usingDemoLevel = parasLiter == null && demoPreviewOn
   const forecastCurrentLiters = usingDemoLevel ? (demoPreviewPct / 100) * (kapasiti || 0) : parasLiter
   const forecast = useMemo(() => buildTankForecast({
@@ -326,6 +331,11 @@ export default function UserDashboard() {
 
   // ── Penjimatan Air: kira daripada sejarah sebenar; guna data contoh (dilabel jelas) jika tidak mencukupi ──
   const realSavings = useMemo(() => computeWaterSavings(fullHistory, kapasiti), [fullHistory, kapasiti])
+  // Auto-hidupkan pratonton sebaik sejarah penuh selesai dimuat dan didapati tidak mencukupi —
+  // sama seperti Ramalan AI, supaya tab terus berguna tanpa klik tambahan.
+  useEffect(() => {
+    if (!fullHistoryLoading && fullHistory != null && realSavings.sufficientData === false) setSavingsDemoOn(true)
+  }, [fullHistoryLoading, fullHistory, realSavings.sufficientData])
   const showSavingsDemo = realSavings.sufficientData === false && savingsDemoOn
   const savingsMonths = showSavingsDemo ? DEMO_SAVINGS_MONTHS : (realSavings.months || [])
   const savingsOverflowEvents = showSavingsDemo ? DEMO_OVERFLOW_EVENTS : (realSavings.overflowRiskEvents || 0)
