@@ -812,55 +812,64 @@ export default function UserDashboard() {
                   </div>
                 </div>
 
-                <div className="two-col">
-                  <div className="section-card">
-                    <div className="section-title"><i className="ti ti-cloud-rain" aria-hidden="true" /> Hujan Ramalan (mm)</div>
-                    <div className="weather-scroll">
-                      {forecast.days.map((d, i) => (
-                        <div key={d.date} className={`weather-day${i === 0 ? ' today' : ''}`}>
-                          <div className="weather-day-name">{d.hari}</div>
-                          <div style={{ height: 60, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 6 }}>
-                            <div style={{
-                              width: 14, borderRadius: 4, background: '#2E71C2',
-                              height: `${Math.max(3, Math.min(60, (d.hujanMm / Math.max(10, ...forecast.days.map(x => x.hujanMm))) * 60))}px`,
-                            }} />
-                          </div>
-                          <div className="weather-day-rain">{Math.round(d.hujanMm)}mm</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                <div className="section-card" style={{ marginBottom: 16 }}>
+                  <div className="section-title"><i className="ti ti-chart-line" aria-hidden="true" /> Hujan Ramalan &amp; Paras Tangki Dijangka</div>
+                  <svg viewBox="0 0 500 210" width="100%" height="210" style={{ overflow: 'visible' }}>
+                    {(() => {
+                      const x0 = 34, x1 = 466, y0 = 10, y1 = 150
+                      const n = forecast.days.length
+                      const xAt = (i) => x0 + (i / n) * (x1 - x0) // i=0 ialah "Sekarang", i=1..n ialah hari ramalan
+                      const rainMax = Math.max(10, ...forecast.days.map(d => d.hujanMm))
+                      const yPct = (pct) => y1 - Math.max(0, Math.min(100, pct)) / 100 * (y1 - y0)
+                      const yMm = (mm) => y1 - Math.max(0, mm) / rainMax * (y1 - y0)
+                      const pts = [{ pct: paras ?? 0 }, ...forecast.days.map(d => ({ pct: d.pct }))]
+                      const linePts = pts.map((p, i) => `${xAt(i)},${yPct(p.pct)}`).join(' ')
+                      const areaPts = `${xAt(0)},${y1} ${linePts} ${xAt(n)},${y1}`
+                      const barW = Math.min(22, (x1 - x0) / n * 0.4)
+                      return (
+                        <>
+                          {/* legenda */}
+                          <rect x={x0} y={-4} width="12" height="10" fill="#2E71C2" fillOpacity="0.55" rx="2" />
+                          <text x={x0 + 16} y={4} fontSize="10" fill="#8A8578">Hujan (mm)</text>
+                          <line x1={x0 + 96} y1={1} x2={x0 + 114} y2={1} stroke="#1D9E75" strokeWidth="2.4" />
+                          <circle cx={x0 + 105} cy={1} r="3" fill="#178763" />
+                          <text x={x0 + 120} y={4} fontSize="10" fill="#8A8578">Paras tangki (%)</text>
 
-                  <div className="section-card">
-                    <div className="section-title"><i className="ti ti-container" aria-hidden="true" /> Paras Tangki Dijangka</div>
-                    <svg viewBox="0 0 460 190" width="100%" height="190" style={{ overflow: 'visible' }}>
-                      <line x1="30" y1="10" x2="30" y2="150" stroke="#F0EADC" strokeWidth="1" />
-                      <line x1="30" y1="150" x2="450" y2="150" stroke="#E3DAC4" strokeWidth="1.2" />
-                      <line x1="30" y1={150 - 1.0 * 140} x2="450" y2={150 - 1.0 * 140} stroke="#E3DAC4" strokeWidth="1" strokeDasharray="4 4" />
-                      <text x="452" y={150 - 1.0 * 140 + 4} fontSize="9" fill="#A6A093">100%</text>
-                      <line x1="30" y1={150 - 0.2 * 140} x2="450" y2={150 - 0.2 * 140} stroke="#D9827A" strokeWidth="1" strokeDasharray="2 3" />
-                      <text x="452" y={150 - 0.2 * 140 + 4} fontSize="9" fill="#C23A39">20%</text>
-                      {(() => {
-                        const pts = [{ pct: paras ?? 0 }, ...forecast.days.map(d => ({ pct: d.pct }))]
-                        const n = pts.length - 1
-                        const xAt = (i) => 30 + (i / n) * 420
-                        const yAt = (pct) => 150 - Math.max(0, Math.min(100, pct)) / 100 * 140
-                        const linePts = pts.map((p, i) => `${xAt(i)},${yAt(p.pct)}`).join(' ')
-                        const areaPts = `30,150 ${linePts} 450,150`
-                        return (
-                          <>
-                            <polygon points={areaPts} fill="#1D9E75" fillOpacity="0.12" />
-                            <polyline points={linePts} fill="none" stroke="#1D9E75" strokeWidth="2.4" />
-                            {pts.map((p, i) => <circle key={i} cx={xAt(i)} cy={yAt(p.pct)} r="3.2" fill="#178763" />)}
-                          </>
-                        )
-                      })()}
-                      <text x="30" y="168" fontSize="9" fill="#A6A093">Sekarang</text>
-                      {forecast.days.map((d, i) => (
-                        <text key={d.date} x={30 + ((i + 1) / forecast.days.length) * 420} y="168" fontSize="9" fill="#A6A093" textAnchor="middle">{d.hari.slice(0, 3)}</text>
-                      ))}
-                    </svg>
-                  </div>
+                          {/* paksi kiri: peratus tangki */}
+                          <line x1={x0} y1={y0} x2={x0} y2={y1} stroke="#F0EADC" strokeWidth="1" />
+                          <line x1={x0} y1={y1} x2={x1} y2={y1} stroke="#E3DAC4" strokeWidth="1.2" />
+                          <line x1={x0} y1={yPct(100)} x2={x1} y2={yPct(100)} stroke="#E3DAC4" strokeWidth="1" strokeDasharray="4 4" />
+                          <text x={x0 - 6} y={yPct(100) + 3} fontSize="9" fill="#A6A093" textAnchor="end">100%</text>
+                          <line x1={x0} y1={yPct(20)} x2={x1} y2={yPct(20)} stroke="#D9827A" strokeWidth="1" strokeDasharray="2 3" />
+                          <text x={x0 - 6} y={yPct(20) + 3} fontSize="9" fill="#C23A39" textAnchor="end">20%</text>
+                          <text x={x0 - 6} y={yPct(0) + 3} fontSize="9" fill="#A6A093" textAnchor="end">0%</text>
+
+                          {/* paksi kanan: mm hujan */}
+                          <text x={x1 + 6} y={yMm(rainMax) + 3} fontSize="9" fill="#2E71C2">{Math.round(rainMax)}mm</text>
+                          <text x={x1 + 6} y={yMm(0) + 3} fontSize="9" fill="#2E71C2">0mm</text>
+
+                          {/* bar hujan, satu setiap hari ramalan */}
+                          {forecast.days.map((d, i) => (
+                            <rect key={d.date} x={xAt(i + 1) - barW / 2} y={yMm(d.hujanMm)} width={barW} height={y1 - yMm(d.hujanMm)} fill="#2E71C2" fillOpacity="0.55" rx="2" />
+                          ))}
+                          {forecast.days.map((d, i) => (
+                            <text key={d.date} x={xAt(i + 1)} y={yMm(d.hujanMm) - 5} fontSize="9" fill="#2E71C2" textAnchor="middle">{Math.round(d.hujanMm)}</text>
+                          ))}
+
+                          {/* garis paras tangki */}
+                          <polygon points={areaPts} fill="#1D9E75" fillOpacity="0.12" />
+                          <polyline points={linePts} fill="none" stroke="#1D9E75" strokeWidth="2.4" />
+                          {pts.map((p, i) => <circle key={i} cx={xAt(i)} cy={yPct(p.pct)} r="3.2" fill="#178763" />)}
+
+                          {/* label paksi-x */}
+                          <text x={xAt(0)} y={y1 + 18} fontSize="9" fill="#A6A093">Sekarang</text>
+                          {forecast.days.map((d, i) => (
+                            <text key={d.date} x={xAt(i + 1)} y={y1 + 18} fontSize="9" fill="#A6A093" textAnchor="middle">{d.hari.slice(0, 3)}</text>
+                          ))}
+                        </>
+                      )
+                    })()}
+                  </svg>
                 </div>
 
                 <div className="section-card" style={{ marginBottom: 24 }}>
@@ -935,12 +944,18 @@ export default function UserDashboard() {
                   <svg viewBox={`0 0 ${Math.max(460, savingsMonths.length * 70)} 200`} width="100%" height="200" style={{ overflow: 'visible' }}>
                     {(() => {
                       const w = Math.max(460, savingsMonths.length * 70)
-                      const x0 = 30, x1 = w - 10, y0 = 10, y1 = 150
-                      const maxV = Math.max(1, ...savingsMonths.flatMap(m => [m.harvestedM3, m.suppliedM3]))
+                      const x0 = 38, x1 = w - 10, y0 = 10, y1 = 150
+                      const maxV = Math.max(1, ...savingsMonths.flatMap(m => [m.harvestedM3, m.suppliedM3])) * 1.15
                       const yAt = (v) => y1 - (v / maxV) * (y1 - y0)
                       const slot = (x1 - x0) / savingsMonths.length
                       return (
                         <>
+                          {[0, 0.5, 1].map((f) => (
+                            <g key={f}>
+                              <line x1={x0} y1={yAt(maxV * f)} x2={x1} y2={yAt(maxV * f)} stroke="#EFE9DA" strokeWidth="1" />
+                              <text x={x0 - 6} y={yAt(maxV * f) + 3} fontSize="9" fill="#A6A093" textAnchor="end">{(maxV * f).toFixed(1)}</text>
+                            </g>
+                          ))}
                           <line x1={x0} y1={y1} x2={x1} y2={y1} stroke="#E3DAC4" strokeWidth="1.2" />
                           {savingsMonths.map((m, i) => {
                             const gx = x0 + i * slot + slot * 0.2
@@ -948,7 +963,9 @@ export default function UserDashboard() {
                             return (
                               <g key={m.label + i}>
                                 <rect x={gx} y={yAt(m.harvestedM3)} width={bw} height={y1 - yAt(m.harvestedM3)} fill="#1D9E75" rx="2" />
+                                <text x={gx + bw / 2} y={yAt(m.harvestedM3) - 5} fontSize="9" fill="#178763" textAnchor="middle">{m.harvestedM3.toFixed(1)}</text>
                                 <rect x={gx + bw + 6} y={yAt(m.suppliedM3)} width={bw} height={y1 - yAt(m.suppliedM3)} fill="#2E71C2" rx="2" />
+                                <text x={gx + bw + 6 + bw / 2} y={yAt(m.suppliedM3) - 5} fontSize="9" fill="#2E71C2" textAnchor="middle">{m.suppliedM3.toFixed(1)}</text>
                                 <text x={gx + bw + 3} y={y1 + 18} fontSize="10" fill="#8A8578" textAnchor="middle">{m.label}</text>
                               </g>
                             )
