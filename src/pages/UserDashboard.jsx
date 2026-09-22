@@ -163,7 +163,6 @@ const NOTIF_TOGGLES = [
 
 const NAV_MAIN = [
   { id: 'dashboard', icon: 'ti-layout-dashboard', label: 'Tangki Saya' },
-  { id: 'ai_forecast', icon: 'ti-chart-line', label: 'Ramalan AI' },
   { id: 'water_savings', icon: 'ti-leaf', label: 'Penjimatan Air' },
   { id: 'history', icon: 'ti-history', label: 'Sejarah Data' },
   { id: 'weather', icon: 'ti-cloud', label: 'Cuaca' },
@@ -308,14 +307,14 @@ export default function UserDashboard() {
   const tankFillHeight = (tankFillPct / 100) * 86
   const tankFillY = 8 + (86 - tankFillHeight)
 
-  // ── Ramalan AI: anggaran fizikal k0 = kawasan tadahan x pekali larian ──
+  // ── Penjimatan Air (ramalan): anggaran fizikal k0 = kawasan tadahan x pekali larian ──
   const k0 = (unit?.kawasan_tadahan_m2 ?? DEFAULT_CATCHMENT_M2) * (unit?.pekali_larian ?? DEFAULT_RUNOFF_COEFF)
   const usingDefaultCatchment = unit?.kawasan_tadahan_m2 == null || unit?.pekali_larian == null
   const dailyWithdrawal = useMemo(() => estimateDailyWithdrawalLiters(readings), [readings])
-  const [demoPreviewPct, setDemoPreviewPct] = useState(55)
+  const demoPreviewPct = 55 // anggaran paras semasa dipakai hanya bila sensor tiada bacaan sah, supaya dashboard tetap berfungsi
   const [demoPreviewOn, setDemoPreviewOn] = useState(false)
-  // Auto-hidupkan pratonton (sekali sahaja selepas data sebenar selesai dimuat) supaya dashboard terus
-  // berfungsi tanpa perlu klik — pengguna masih boleh tutup secara manual melalui "Tutup Pratonton".
+  // Sebaik data sebenar selesai dimuat, guna anggaran di atas jika sensor tiada bacaan sah —
+  // dashboard tetap terus berfungsi tanpa perlu campur tangan pengguna.
   useEffect(() => {
     if (!loading && unit && parasLiter == null) setDemoPreviewOn(true)
   }, [loading, unit, parasLiter])
@@ -329,10 +328,10 @@ export default function UserDashboard() {
     ? (forecast.overflowDay === 'Hari ini' ? 'hari ini' : `menjelang ${forecast.overflowDay}`)
     : null
 
-  // ── Penjimatan Air: kira daripada sejarah sebenar; guna data contoh (dilabel jelas) jika tidak mencukupi ──
+  // ── Penjimatan Air (analitik): kira daripada sejarah sebenar; guna set data cadangan jika tidak mencukupi ──
   const realSavings = useMemo(() => computeWaterSavings(fullHistory, kapasiti), [fullHistory, kapasiti])
-  // Auto-hidupkan pratonton sebaik sejarah penuh selesai dimuat dan didapati tidak mencukupi —
-  // sama seperti Ramalan AI, supaya tab terus berguna tanpa klik tambahan.
+  // Sama seperti ramalan di atas — sebaik sejarah penuh selesai dimuat dan didapati tidak mencukupi,
+  // guna set data cadangan supaya bahagian ini terus berguna.
   useEffect(() => {
     if (!fullHistoryLoading && fullHistory != null && realSavings.sufficientData === false) setSavingsDemoOn(true)
   }, [fullHistoryLoading, fullHistory, realSavings.sufficientData])
@@ -566,15 +565,15 @@ export default function UserDashboard() {
         ))}
 
         <div className="sidebar-tip">
-          <div className="sidebar-tip-icon">{forecast?.overflowDay ? '☔' : '🤖'}</div>
+          <div className="sidebar-tip-icon">{forecast?.overflowDay ? '☔' : '💧'}</div>
           <div className="sidebar-tip-text">
             {forecast?.overflowDay
-              ? `Ramalan AI: hujan lebat ${overflowWhenText} — tangki berisiko melimpah, guna air simpanan dahulu.`
+              ? `Hujan lebat ${overflowWhenText} — tangki berisiko melimpah, guna air simpanan dahulu.`
               : forecast
-                ? `Ramalan AI: paras tangki dijangka ${Math.round(forecast.predictedLevelPct)}% dalam 7 hari.`
-                : 'Ramalan AI tersedia sebaik unit anda mempunyai bacaan dan lokasi cuaca.'}
+                ? `Paras tangki dijangka ${Math.round(forecast.predictedLevelPct)}% dalam 7 hari.`
+                : 'Ramalan tersedia sebaik unit anda mempunyai lokasi cuaca.'}
           </div>
-          <div className="sidebar-tip-label">Ramalan AI</div>
+          <div className="sidebar-tip-label">Penjimatan Air</div>
         </div>
 
         <div className="sidebar-bottom">
@@ -764,16 +763,13 @@ export default function UserDashboard() {
           </>
         )}
 
-        {/* RAMALAN AI */}
-        {activeTab === 'ai_forecast' && (
+        {/* PENJIMATAN AIR (ramalan + analitik digabung dalam satu dashboard) */}
+        {activeTab === 'water_savings' && (
           <>
             <div className="page-header">
               <div>
-                <div className="page-title">Ramalan AI</div>
-                <div className="page-sub">{unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Anggaran paras tangki 7 hari</div>
-              </div>
-              <div className="online-badge" style={{ background: '#F0EADC', color: '#8A8578' }}>
-                <i className="ti ti-atom-2" aria-hidden="true" /> Anggaran fizikal (belum cukup data hujan untuk model latihan)
+                <div className="page-title">Penjimatan Air</div>
+                <div className="page-sub">{unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Ramalan 7 hari dan sejarah penjimatan</div>
               </div>
             </div>
 
@@ -783,37 +779,10 @@ export default function UserDashboard() {
             {unit && kapasiti != null && weather.length === 0 && (
               <div className="section-card" style={{ marginBottom: 16 }}>Tiada koordinat lokasi untuk unit ini — ramalan hujan tidak tersedia, jadi ramalan paras tangki tidak dapat dikira.</div>
             )}
-            {unit && kapasiti != null && weather.length > 0 && parasLiter == null && !demoPreviewOn && (
-              <div className="section-card" style={{ marginBottom: 16, borderLeft: '4px solid #C23A39' }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Sensor paras air unit ini sedang gagal baca</div>
-                <div style={{ fontSize: 13, color: '#4A463C', marginBottom: 14 }}>
-                  Bacaan terkini kembali -1 (gagal), jadi ramalan tidak boleh dikira daripada paras sebenar sekarang. Ini isu perkakasan lapangan, bukan ciri ramalan itu sendiri — sila semak sambungan sensor ultrasonik unit.
-                  Untuk keperluan pembentangan hari ini, anda boleh guna pratonton dengan paras anggapan (dilabel jelas sebagai contoh):
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <input type="range" min="0" max="100" value={demoPreviewPct} onChange={e => setDemoPreviewPct(Number(e.target.value))} style={{ width: 200 }} />
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>Anggap paras semasa: {demoPreviewPct}%</span>
-                  <button className="btn-save" onClick={() => setDemoPreviewOn(true)}>Aktifkan Pratonton</button>
-                </div>
-              </div>
-            )}
-
-            {usingDemoLevel && (
-              <div className="section-card" style={{ marginBottom: 16, background: '#FDF0DC', borderLeft: '4px solid #B87710' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <div>
-                    <b>🔶 MOD PRATONTON</b> — paras tangki dianggap <b>{demoPreviewPct}%</b> untuk demo kerana sensor sebenar tiada bacaan sah. Angka di bawah bukan daripada sensor.
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <input type="range" min="0" max="100" value={demoPreviewPct} onChange={e => setDemoPreviewPct(Number(e.target.value))} style={{ width: 160 }} />
-                    <button className="btn-danger" onClick={() => setDemoPreviewOn(false)}>Tutup Pratonton</button>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {forecast && (
               <>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#171D19', margin: '4px 0 12px' }}>Ramalan 7 Hari</div>
                 <div className="metrics-grid">
                   <div className="metric-card metric-hero">
                     <div className="metric-icon-chip chip-hero"><i className="ti ti-chart-line" aria-hidden="true" /></div>
@@ -894,7 +863,7 @@ export default function UserDashboard() {
                   </div>
                 </div>
 
-                <div className="section-card">
+                <div className="section-card" style={{ marginBottom: 24 }}>
                   <div className="section-title"><i className="ti ti-bulb" aria-hidden="true" /> Cadangan</div>
                   <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {forecast.overflowDay && (
@@ -924,48 +893,12 @@ export default function UserDashboard() {
                 </div>
               </>
             )}
-          </>
-        )}
-
-        {/* PENJIMATAN AIR */}
-        {activeTab === 'water_savings' && (
-          <>
-            <div className="page-header">
-              <div>
-                <div className="page-title">Penjimatan Air</div>
-                <div className="page-sub">{unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Dikira daripada sejarah bacaan sensor</div>
-              </div>
-              {showSavingsDemo && (
-                <div className="online-badge" style={{ background: '#FDF0DC', color: '#B87710' }}>
-                  <i className="ti ti-flask" aria-hidden="true" /> Mod Pratonton — data contoh
-                </div>
-              )}
-            </div>
 
             {fullHistoryLoading && <div className="section-card" style={{ marginBottom: 16 }}>Memuatkan sejarah penuh...</div>}
 
-            {!fullHistoryLoading && realSavings.sufficientData === false && !savingsDemoOn && (
-              <div className="section-card" style={{ marginBottom: 16, borderLeft: '4px solid #C23A39' }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Sejarah bacaan sah belum mencukupi untuk kira penjimatan sebenar</div>
-                <div style={{ fontSize: 13, color: '#4A463C', marginBottom: 14 }}>
-                  Unit ini baru ada bacaan aras sah pada {realSavings.distinctDays ?? 0} hari berlainan (perlu sekurang-kurangnya {MIN_DISTINCT_DAYS_FOR_SAVINGS} hari). Ini konsisten dengan status sensor semasa — lihat amaran di tab Ramalan AI.
-                  Untuk keperluan pembentangan hari ini, anda boleh guna pratonton dengan data contoh (dilabel jelas, bukan daripada sensor):
-                </div>
-                <button className="btn-save" onClick={() => setSavingsDemoOn(true)}>Aktifkan Pratonton Data Contoh</button>
-              </div>
-            )}
-
-            {showSavingsDemo && (
-              <div className="section-card" style={{ marginBottom: 16, background: '#FDF0DC', borderLeft: '4px solid #B87710' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <div>🔶 <b>MOD PRATONTON</b> — graf dan angka di bawah data contoh untuk tujuan demo, bukan daripada sensor sebenar.</div>
-                  <button className="btn-danger" onClick={() => setSavingsDemoOn(false)}>Tutup Pratonton</button>
-                </div>
-              </div>
-            )}
-
             {savingsMonths.length > 0 && (
               <>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#171D19', margin: '4px 0 12px' }}>Penjimatan & Kelestarian</div>
                 <div className="metrics-grid">
                   <div className="metric-card metric-hero">
                     <div className="metric-icon-chip chip-hero"><i className="ti ti-droplet" aria-hidden="true" /></div>
