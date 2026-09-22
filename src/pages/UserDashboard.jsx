@@ -814,12 +814,13 @@ export default function UserDashboard() {
 
                 <div className="section-card" style={{ marginBottom: 16 }}>
                   <div className="section-title"><i className="ti ti-chart-line" aria-hidden="true" /> Hujan Ramalan &amp; Paras Tangki Dijangka</div>
-                  <svg viewBox="0 0 500 210" width="100%" height="210" style={{ overflow: 'visible' }}>
+                  <svg viewBox="0 0 500 240" width="100%" height="240" style={{ overflow: 'visible' }}>
                     {(() => {
-                      const x0 = 34, x1 = 466, y0 = 10, y1 = 150
+                      const x0 = 34, x1 = 462, y0 = 40, y1 = 180
                       const n = forecast.days.length
                       const xAt = (i) => x0 + (i / n) * (x1 - x0) // i=0 ialah "Sekarang", i=1..n ialah hari ramalan
-                      const rainMax = Math.max(10, ...forecast.days.map(d => d.hujanMm))
+                      const rainDataMax = Math.max(10, ...forecast.days.map(d => d.hujanMm))
+                      const rainMax = rainDataMax * 1.25 // ruang lebih di atas supaya label nilai bar tak bertindih paksi
                       const yPct = (pct) => y1 - Math.max(0, Math.min(100, pct)) / 100 * (y1 - y0)
                       const yMm = (mm) => y1 - Math.max(0, mm) / rainMax * (y1 - y0)
                       const pts = [{ pct: paras ?? 0 }, ...forecast.days.map(d => ({ pct: d.pct }))]
@@ -829,11 +830,11 @@ export default function UserDashboard() {
                       return (
                         <>
                           {/* legenda */}
-                          <rect x={x0} y={-4} width="12" height="10" fill="#2E71C2" fillOpacity="0.55" rx="2" />
-                          <text x={x0 + 16} y={4} fontSize="10" fill="#8A8578">Hujan (mm)</text>
-                          <line x1={x0 + 96} y1={1} x2={x0 + 114} y2={1} stroke="#1D9E75" strokeWidth="2.4" />
-                          <circle cx={x0 + 105} cy={1} r="3" fill="#178763" />
-                          <text x={x0 + 120} y={4} fontSize="10" fill="#8A8578">Paras tangki (%)</text>
+                          <rect x={x0} y={10} width="12" height="10" fill="#2E71C2" fillOpacity="0.55" rx="2" />
+                          <text x={x0 + 16} y={19} fontSize="10" fill="#8A8578">Hujan (mm)</text>
+                          <line x1={x0 + 96} y1={15} x2={x0 + 114} y2={15} stroke="#1D9E75" strokeWidth="2.4" />
+                          <circle cx={x0 + 105} cy={15} r="3" fill="#178763" />
+                          <text x={x0 + 122} y={19} fontSize="10" fill="#8A8578">Paras tangki (%)</text>
 
                           {/* paksi kiri: peratus tangki */}
                           <line x1={x0} y1={y0} x2={x0} y2={y1} stroke="#F0EADC" strokeWidth="1" />
@@ -845,7 +846,7 @@ export default function UserDashboard() {
                           <text x={x0 - 6} y={yPct(0) + 3} fontSize="9" fill="#A6A093" textAnchor="end">0%</text>
 
                           {/* paksi kanan: mm hujan */}
-                          <text x={x1 + 6} y={yMm(rainMax) + 3} fontSize="9" fill="#2E71C2">{Math.round(rainMax)}mm</text>
+                          <text x={x1 + 6} y={y0 + 3} fontSize="9" fill="#2E71C2">{Math.round(rainMax)}mm</text>
                           <text x={x1 + 6} y={yMm(0) + 3} fontSize="9" fill="#2E71C2">0mm</text>
 
                           {/* bar hujan, satu setiap hari ramalan */}
@@ -853,7 +854,7 @@ export default function UserDashboard() {
                             <rect key={d.date} x={xAt(i + 1) - barW / 2} y={yMm(d.hujanMm)} width={barW} height={y1 - yMm(d.hujanMm)} fill="#2E71C2" fillOpacity="0.55" rx="2" />
                           ))}
                           {forecast.days.map((d, i) => (
-                            <text key={d.date} x={xAt(i + 1)} y={yMm(d.hujanMm) - 5} fontSize="9" fill="#2E71C2" textAnchor="middle">{Math.round(d.hujanMm)}</text>
+                            <text key={d.date} x={xAt(i + 1)} y={yMm(d.hujanMm) - 6} fontSize="9" fill="#2E71C2" textAnchor="middle">{Math.round(d.hujanMm)}</text>
                           ))}
 
                           {/* garis paras tangki */}
