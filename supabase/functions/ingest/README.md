@@ -40,11 +40,11 @@ Susunan penting: jika polisi anon dibuang sebelum firmware baharu berjalan, **ES
 1. **Laksana migrasi fasa 1** (`supabase db push`, atau `apply_migration`).
 2. **Deploy function tanpa JWT** (peranti tiada JWT; kunci peranti ialah pengesahannya):
    ```bash
-   supabase functions deploy ingest --no-verify-jwt --project-ref tbwhrhzsojrofemtrmxh
+   supabase functions deploy ingest --no-verify-jwt --project-ref <PROJECT_REF>
    ```
 3. **Smoke test tanpa kunci sah** (kedua-duanya mesti `401`):
    ```bash
-   URL=https://tbwhrhzsojrofemtrmxh.supabase.co/functions/v1/ingest
+   URL=https://<PROJECT_REF>.supabase.co/functions/v1/ingest
    curl -s -o /dev/null -w "%{http_code}\n" -X POST $URL -d '{}'
    curl -s -o /dev/null -w "%{http_code}\n" -X POST $URL -H "x-device-key: $(printf 'a%.0s' {1..64})" -d '{}'
    ```
@@ -65,7 +65,7 @@ Susunan penting: jika polisi anon dibuang sebelum firmware baharu berjalan, **ES
    Semak: `select unit_id, max(created_at) from sensor_data group by 1;`
    Kemudian jalankan `supabase/manual/2_tutup_anon_insert.sql`, dan sahkan suntikan lama ditolak:
    ```bash
-   curl -s -X POST https://tbwhrhzsojrofemtrmxh.supabase.co/rest/v1/sensor_data \
+   curl -s -X POST https://<PROJECT_REF>.supabase.co/rest/v1/sensor_data \
      -H "apikey: <ANON_KEY>" -H "Authorization: Bearer <ANON_KEY>" -H "Content-Type: application/json" \
      -d '{"unit_id":"82af1364-00e5-4254-88fe-bbbc42097ee2","paras_air_pct":1,"paras_air_liter":1,"solar_volt":0,"bateri_pct":0}'
    # mesti: permission denied (42501)
