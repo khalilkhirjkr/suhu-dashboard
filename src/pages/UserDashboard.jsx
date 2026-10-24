@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { chargeTrend, hasBatteryReading, CHARGE_LABEL } from '../lib/battery'
 
 const ONLINE_THRESHOLD_MIN = 15 // unit upload setiap 5 min — anggap offline lepas 3 pusingan terlepas
 
@@ -79,9 +80,14 @@ export default function UserDashboard() {
 
   useEffect(() => {
     let sensorChannel, alertChannel
+    // load() async — jika komponen unmount / effect di-run semula (cth. StrictMode) sebelum ia siap,
+    // cleanup berjalan dulu. `cancelled` menghalang load() lama daripada melanggan channel yang tak dibuang.
+    let cancelled = false
+    const runId = Math.random().toString(36).slice(2, 8) // nama channel unik setiap larian
 
     const load = async () => {
       const { data: { user } } = await supabase.auth.getUser()
+      if (cancelled) return
       if (!user) { setLoading(false); return }
       setUserId(user.id)
 
@@ -90,6 +96,7 @@ export default function UserDashboard() {
         supabase.from('units').select('*').eq('owner_id', user.id).single(),
         supabase.from('notification_preferences').select('*').eq('user_id', user.id).single(),
       ])
+      if (cancelled) return
       setProfile(profileData)
       setUnit(unitData)
       setNotifPrefs(prefsData)
@@ -99,11 +106,12 @@ export default function UserDashboard() {
           supabase.from('sensor_data').select('*').eq('unit_id', unitData.id).order('created_at', { ascending: false }).limit(50),
           supabase.from('alert_state').select('*').eq('unit_id', unitData.id).eq('is_active', true),
         ])
+        if (cancelled) return
         setReadings(readingData || [])
         setAlerts(alertData || [])
 
         sensorChannel = supabase
-          .channel(`sensor_data_${unitData.id}`)
+          .channel(`sensor_data_${unitData.id}_${runId}`)
           .on('postgres_changes', {
             event: 'INSERT', schema: 'public', table: 'sensor_data',
             filter: `unit_id=eq.${unitData.id}`,
@@ -113,7 +121,7 @@ export default function UserDashboard() {
           .subscribe()
 
         alertChannel = supabase
-          .channel(`alert_state_${unitData.id}`)
+          .channel(`alert_state_${unitData.id}_${runId}`)
           .on('postgres_changes', {
             event: '*', schema: 'public', table: 'alert_state',
             filter: `unit_id=eq.${unitData.id}`,
@@ -130,6 +138,7 @@ export default function UserDashboard() {
     load()
 
     return () => {
+      cancelled = true
       if (sensorChannel) supabase.removeChannel(sensorChannel)
       if (alertChannel) supabase.removeChannel(alertChannel)
     }
@@ -170,8 +179,13 @@ export default function UserDashboard() {
   const parasLiter = latest && latest.paras_air_liter >= 0 ? Math.round(latest.paras_air_liter) : null
   const kapasiti = unit?.kapasiti_liter ?? null
   const hujan = latest ? (latest.hujan_status ? 'Ya' : 'Tidak') : null
-  const solar = latest ? latest.solar_volt.toFixed(1) : null
-  const bateri = latest && latest.bateri_pct != null ? Math.round(latest.bateri_pct) : null
+  // Unit tiada sensor solar — status pengecasan diterbitkan daripada trend voltan bateri.
+  // Bateri "tiada sensor" bila firmware hantar 0 (B25 belum dipasang), bukan bateri kosong.
+  const batSensor = hasBatteryReading(latest)
+  const bateri = batSensor && latest.bateri_pct != null ? Math.round(latest.bateri_pct) : null
+  const bateriVolt = batSensor ? latest.bateri_volt.toFixed(1) : null
+  const trend = chargeTrend(readings)
+  const mengecas = trend.state === 'charging'
   // Nama panggilan = nama penuh tanpa bahagian patronimik (bin/binti ...)
   const firstName = profile?.full_name?.split(/\s+bin\s+|\s+binti\s+/i)[0].trim() || 'Pengguna'
   const nameInitial = (profile?.full_name || 'P')[0].toUpperCase()
@@ -501,14 +515,14 @@ export default function UserDashboard() {
               <div className="metric-card">
                 <div className="metric-icon-chip chip-amber"><i className="ti ti-solar-panel" aria-hidden="true" /></div>
                 <div className="metric-label">Solar</div>
-                <div className="metric-val">{solar ?? '–'}</div>
-                <div className="metric-unit">V output</div>
+                <div className="metric-val" style={{ fontSize: 22 }}>{batSensor ? (mengecas ? 'Mengecas' : trend.state === 'discharging' ? 'Tidak mengecas' : CHARGE_LABEL[trend.state]) : '–'}</div>
+                <div className="metric-unit">{batSensor ? 'berdasarkan trend voltan bateri' : 'perlu sensor bateri'}</div>
               </div>
               <div className="metric-card">
-                <div className="metric-icon-chip chip-green"><i className="ti ti-battery-charging" aria-hidden="true" /></div>
+                <div className="metric-icon-chip chip-green"><i className={`ti ${mengecas ? 'ti-battery-charging' : 'ti-battery-3'}`} aria-hidden="true" /></div>
                 <div className="metric-label">Bateri</div>
                 <div className="metric-val">{bateri !== null ? bateri : '–'}</div>
-                <div className="metric-unit">% caj</div>
+                <div className="metric-unit">{batSensor ? `% caj · ${bateriVolt} V` : 'tiada sensor bateri'}</div>
               </div>
             </div>
 
@@ -533,8 +547,8 @@ export default function UserDashboard() {
                 <div>
                   <div className="bar-row">
                     <span className="bar-label">Solar</span>
-                    <div className="bar-track"><div className="bar-fill" style={{ width: latest ? `${Math.min(latest.solar_volt / 25 * 100, 100)}%` : '0%', background: '#EF9F27' }} /></div>
-                    <span className="bar-val">{solar !== null ? `${solar}V` : '–'}</span>
+                    <div className="bar-track"><div className="bar-fill" style={{ width: mengecas ? '100%' : '0%', background: '#EF9F27' }} /></div>
+                    <span className="bar-val">{batSensor ? (mengecas ? 'Mengecas' : '–') : '–'}</span>
                   </div>
                   <div className="bar-row">
                     <span className="bar-label">Bateri</span>
@@ -549,11 +563,11 @@ export default function UserDashboard() {
                 <div className="section-title"><i className="ti ti-history" aria-hidden="true" /> Log Terkini</div>
                 <table className="log-table">
                   <thead>
-                    <tr><th>Masa</th><th>Paras</th><th>Hujan</th><th>Solar</th><th>Bateri</th></tr>
+                    <tr><th>Masa</th><th>Paras</th><th>Hujan</th><th>Bateri</th></tr>
                   </thead>
                   <tbody>
                     {readings.length === 0 && (
-                      <tr><td colSpan={5} style={{ color: '#A6A093', textAlign: 'center', padding: '20px 0' }}>Tiada bacaan lagi</td></tr>
+                      <tr><td colSpan={4} style={{ color: '#A6A093', textAlign: 'center', padding: '20px 0' }}>Tiada bacaan lagi</td></tr>
                     )}
                     {readings.slice(0, 8).map((l) => (
                       <tr key={l.id}>
@@ -563,8 +577,7 @@ export default function UserDashboard() {
                           <span className={`dot ${l.hujan_status ? 'dot-g' : 'dot-r'}`} />
                           {l.hujan_status ? 'Ya' : 'Tidak'}
                         </td>
-                        <td>{l.solar_volt.toFixed(1)}V</td>
-                        <td>{l.bateri_pct != null ? `${Math.round(l.bateri_pct)}%` : '–'}</td>
+                        <td>{hasBatteryReading(l) && l.bateri_pct != null ? `${Math.round(l.bateri_pct)}%` : '–'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -608,11 +621,11 @@ export default function UserDashboard() {
               <div className="section-title"><i className="ti ti-table" aria-hidden="true" /> Log Sensor — {readings.length} bacaan terkini</div>
               <table className="log-table">
                 <thead>
-                  <tr><th>Masa</th><th>Paras Air</th><th>Hujan</th><th>Solar</th><th>Bateri</th></tr>
+                  <tr><th>Masa</th><th>Paras Air</th><th>Hujan</th><th>Bateri</th></tr>
                 </thead>
                 <tbody>
                   {readings.length === 0 && (
-                    <tr><td colSpan={5} style={{ color: '#A6A093', textAlign: 'center', padding: '20px 0' }}>Tiada bacaan lagi</td></tr>
+                    <tr><td colSpan={4} style={{ color: '#A6A093', textAlign: 'center', padding: '20px 0' }}>Tiada bacaan lagi</td></tr>
                   )}
                   {readings.map((l) => (
                     <tr key={l.id}>
@@ -628,8 +641,7 @@ export default function UserDashboard() {
                         ) : '– gagal baca'}
                       </td>
                       <td><span className={`dot ${l.hujan_status ? 'dot-g' : 'dot-r'}`} />{l.hujan_status ? 'Ya' : 'Tidak'}</td>
-                      <td>{l.solar_volt.toFixed(1)}V</td>
-                      <td>{l.bateri_pct != null ? `${Math.round(l.bateri_pct)}%` : '–'}</td>
+                      <td>{hasBatteryReading(l) ? `${l.bateri_volt.toFixed(1)}V (${Math.round(l.bateri_pct)}%)` : '–'}</td>
                     </tr>
                   ))}
                 </tbody>

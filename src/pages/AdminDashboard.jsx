@@ -5,6 +5,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from '../lib/supabase'
 import LocationPicker from '../components/LocationPicker'
+import RoofAreaPicker, { MAX_AREA_M2 } from '../components/RoofAreaPicker'
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -30,7 +31,7 @@ const MAINTENANCE = [
 ]
 
 function emptyAddUnitForm() {
-  return { ownerId: '', serialNumber: '', model: 'SuHu Starter', kapasitiLiter: 630, tarikhPasang: '', tarikhWarranti: '', lokasiAlamat: '', lat: null, lon: null }
+  return { ownerId: '', serialNumber: '', model: 'SuHu Starter', kapasitiLiter: 630, tarikhPasang: '', tarikhWarranti: '', lokasiAlamat: '', lat: null, lon: null, tadahanPoints: [], luasTadahan: '' }
 }
 
 const NAV_ITEMS = [
@@ -80,6 +81,10 @@ export default function AdminDashboard() {
     if (!f.ownerId) { setAddUnitError('Sila pilih owner unit.'); return }
     if (!f.serialNumber.trim()) { setAddUnitError('Sila isi nombor siri unit.'); return }
     if (f.lat == null || f.lon == null) { setAddUnitError('Sila tetapkan lokasi unit pada peta.'); return }
+    const luasTadahan = f.luasTadahan === '' ? null : Number(f.luasTadahan)
+    if (luasTadahan !== null && (!Number.isFinite(luasTadahan) || luasTadahan <= 0 || luasTadahan > MAX_AREA_M2)) {
+      setAddUnitError(`Luas tadahan mesti antara 0 dan ${MAX_AREA_M2} m².`); return
+    }
 
     setAddUnitSaving(true)
     setAddUnitError('')
@@ -92,6 +97,7 @@ export default function AdminDashboard() {
       lokasi_lat: f.lat,
       lokasi_lon: f.lon,
       kapasiti_liter: Number(f.kapasitiLiter) || 630,
+      luas_tadahan_m2: luasTadahan,
       tarikh_pasang: f.tarikhPasang || null,
       tarikh_warranti: f.tarikhWarranti || null,
     })
@@ -728,6 +734,17 @@ export default function AdminDashboard() {
                     lat={addUnitForm.lat}
                     lon={addUnitForm.lon}
                     onChange={(lat, lon) => setAddUnitForm(f => ({ ...f, lat, lon }))}
+                  />
+                </div>
+
+                <div className="form-row">
+                  <label className="form-label">Luas Tadahan Bumbung (untuk anggaran air dituai)</label>
+                  <RoofAreaPicker
+                    lat={addUnitForm.lat}
+                    lon={addUnitForm.lon}
+                    points={addUnitForm.tadahanPoints}
+                    value={addUnitForm.luasTadahan}
+                    onChange={(tadahanPoints, luasTadahan) => setAddUnitForm(f => ({ ...f, tadahanPoints, luasTadahan }))}
                   />
                 </div>
 

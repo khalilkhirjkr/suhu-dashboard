@@ -72,7 +72,7 @@ export default function LocationPicker({ lat, lon, onChange }) {
       </button>
 
       <div style={{ height: 220, borderRadius: 12, overflow: 'hidden', marginBottom: 10, border: '1px solid #F0E9DA' }}>
-        <MapContainer center={position || DEFAULT_CENTER} zoom={position ? 15 : 6} style={{ height: '100%', width: '100%' }}>
+        <MapContainer center={position || DEFAULT_CENTER} zoom={position ? 15 : 6} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
           <ClickHandler onPick={onChange} />
           <RecenterMap position={position} />
