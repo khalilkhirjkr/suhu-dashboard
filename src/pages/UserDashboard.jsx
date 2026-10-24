@@ -69,7 +69,10 @@ export default function UserDashboard() {
 
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState(null)
-  const [unit, setUnit] = useState(null)
+  const [units, setUnits] = useState([])
+  const [selectedUnitId, setSelectedUnitId] = useState(null)
+  const [dataLoading, setDataLoading] = useState(true)
+  const unit = units.find(u => u.id === selectedUnitId) || null
   const [readings, setReadings] = useState([])
   const [weather, setWeather] = useState([])
   const [weatherLoading, setWeatherLoading] = useState(false)
@@ -78,62 +81,84 @@ export default function UserDashboard() {
   const [bellOpen, setBellOpen] = useState(false)
   const [userId, setUserId] = useState(null)
 
+  // 1) Profil, senarai unit milik pengguna, tetapan notifikasi. Pengguna boleh ada lebih daripada satu unit.
   useEffect(() => {
-    let sensorChannel, alertChannel
-    // load() async — jika komponen unmount / effect di-run semula (cth. StrictMode) sebelum ia siap,
-    // cleanup berjalan dulu. `cancelled` menghalang load() lama daripada melanggan channel yang tak dibuang.
     let cancelled = false
-    const runId = Math.random().toString(36).slice(2, 8) // nama channel unik setiap larian
-
     const load = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (cancelled) return
       if (!user) { setLoading(false); return }
       setUserId(user.id)
 
-      const [{ data: profileData }, { data: unitData }, { data: prefsData }] = await Promise.all([
+      const [{ data: profileData }, { data: unitRows }, { data: prefsData }] = await Promise.all([
         supabase.from('profiles').select('full_name, email').eq('id', user.id).single(),
-        supabase.from('units').select('*').eq('owner_id', user.id).single(),
+        supabase.from('units').select('*').eq('owner_id', user.id).order('serial_number'),
         supabase.from('notification_preferences').select('*').eq('user_id', user.id).single(),
       ])
       if (cancelled) return
       setProfile(profileData)
-      setUnit(unitData)
       setNotifPrefs(prefsData)
-
-      if (unitData) {
-        const [{ data: readingData }, { data: alertData }] = await Promise.all([
-          supabase.from('sensor_data').select('*').eq('unit_id', unitData.id).order('created_at', { ascending: false }).limit(50),
-          supabase.from('alert_state').select('*').eq('unit_id', unitData.id).eq('is_active', true),
-        ])
-        if (cancelled) return
-        setReadings(readingData || [])
-        setAlerts(alertData || [])
-
-        sensorChannel = supabase
-          .channel(`sensor_data_${unitData.id}_${runId}`)
-          .on('postgres_changes', {
-            event: 'INSERT', schema: 'public', table: 'sensor_data',
-            filter: `unit_id=eq.${unitData.id}`,
-          }, (payload) => {
-            setReadings(prev => [payload.new, ...prev].slice(0, 50))
-          })
-          .subscribe()
-
-        alertChannel = supabase
-          .channel(`alert_state_${unitData.id}_${runId}`)
-          .on('postgres_changes', {
-            event: '*', schema: 'public', table: 'alert_state',
-            filter: `unit_id=eq.${unitData.id}`,
-          }, (payload) => {
-            setAlerts(prev => {
-              const withoutThis = prev.filter(a => a.id !== payload.new.id)
-              return payload.new.is_active ? [...withoutThis, payload.new] : withoutThis
-            })
-          })
-          .subscribe()
-      }
+      const rows = unitRows || []
+      setUnits(rows)
+      let saved = null
+      try { saved = localStorage.getItem('suhu_unit') } catch { /* storage tak tersedia */ }
+      setSelectedUnitId((rows.find(u => u.id === saved) || rows[0])?.id ?? null)
       setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  const selectUnit = (id) => {
+    if (id === selectedUnitId) return
+    setDataLoading(true)
+    setReadings([])
+    setAlerts([])
+    setSelectedUnitId(id)
+    try { localStorage.setItem('suhu_unit', id) } catch { /* abaikan */ }
+  }
+
+  // 2) Bacaan + amaran + langganan realtime bagi unit yang dipilih. Diulang bila pengguna tukar unit.
+  useEffect(() => {
+    if (!selectedUnitId) return
+    let sensorChannel, alertChannel
+    // load() async — jika effect di-run semula (tukar unit / StrictMode) sebelum ia siap, cleanup berjalan dulu.
+    // `cancelled` menghalang load() lama daripada melanggan channel yang tak dibuang.
+    let cancelled = false
+    const runId = Math.random().toString(36).slice(2, 8) // nama channel unik setiap larian
+
+    const load = async () => {
+      const [{ data: readingData }, { data: alertData }] = await Promise.all([
+        supabase.from('sensor_data').select('*').eq('unit_id', selectedUnitId).order('created_at', { ascending: false }).limit(50),
+        supabase.from('alert_state').select('*').eq('unit_id', selectedUnitId).eq('is_active', true),
+      ])
+      if (cancelled) return
+      setReadings(readingData || [])
+      setAlerts(alertData || [])
+      setDataLoading(false)
+
+      sensorChannel = supabase
+        .channel(`sensor_data_${selectedUnitId}_${runId}`)
+        .on('postgres_changes', {
+          event: 'INSERT', schema: 'public', table: 'sensor_data',
+          filter: `unit_id=eq.${selectedUnitId}`,
+        }, (payload) => {
+          setReadings(prev => [payload.new, ...prev].slice(0, 50))
+        })
+        .subscribe()
+
+      alertChannel = supabase
+        .channel(`alert_state_${selectedUnitId}_${runId}`)
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'alert_state',
+          filter: `unit_id=eq.${selectedUnitId}`,
+        }, (payload) => {
+          setAlerts(prev => {
+            const withoutThis = prev.filter(a => a.id !== payload.new.id)
+            return payload.new.is_active ? [...withoutThis, payload.new] : withoutThis
+          })
+        })
+        .subscribe()
     }
     load()
 
@@ -142,7 +167,7 @@ export default function UserDashboard() {
       if (sensorChannel) supabase.removeChannel(sensorChannel)
       if (alertChannel) supabase.removeChannel(alertChannel)
     }
-  }, [])
+  }, [selectedUnitId])
 
   const toggleNotifPref = async (key) => {
     const current = notifPrefs ? notifPrefs[key] : true
@@ -480,9 +505,21 @@ export default function UserDashboard() {
                   {unit?.lokasi_alamat || 'Lokasi belum didaftarkan'} · Kemaskini {formatRelativeTime(latest?.created_at)}
                 </div>
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {units.length > 1 && (
+                <select
+                  value={selectedUnitId || ''}
+                  onChange={(e) => selectUnit(e.target.value)}
+                  aria-label="Pilih unit"
+                  style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 600, color: '#1D2420', background: '#fff', border: '1px solid #E3DAC4', borderRadius: 999, padding: '7px 14px', cursor: 'pointer' }}
+                >
+                  {units.map(u => <option key={u.id} value={u.id}>{u.serial_number}</option>)}
+                </select>
+              )}
               <div className="online-badge" style={!isOnline ? { background: '#F0EADC', color: '#8A8578' } : undefined}>
                 <div className="online-dot" style={!isOnline ? { background: '#8A8578', animation: 'none' } : undefined} />
                 {isOnline ? 'Dalam Talian' : 'Luar Talian'}
+              </div>
               </div>
             </div>
 
@@ -492,7 +529,7 @@ export default function UserDashboard() {
                 Tiada unit SuHu didaftarkan untuk akaun anda lagi. Hubungi admin untuk pendaftaran unit.
               </div>
             )}
-            {!loading && unit && readings.length === 0 && (
+            {!loading && unit && !dataLoading && readings.length === 0 && (
               <div className="section-card" style={{ marginBottom: 16 }}>
                 Unit anda dah berdaftar tapi belum ada bacaan sensor diterima lagi. Pastikan unit online dan disambung ke WiFi.
               </div>
