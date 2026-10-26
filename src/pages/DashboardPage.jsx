@@ -10,26 +10,18 @@ export default function DashboardPage() {
   useEffect(() => {
     const getRole = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      console.log('🔵 Current user:', user)
-      console.log('🔵 User ID:', user?.id)
-      console.log('🔵 User email:', user?.email)
 
       if (!user) {
-        console.log('🔴 No user found — defaulting to user role')
         setRole('user')
         setLoading(false)
         return
       }
 
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', user.id)
         .single()
-
-      console.log('🔵 Profile query data:', data)
-      console.log('🔵 Profile query error:', error)
-      console.log('🔵 Final role:', data?.role || 'user')
 
       setRole(data?.role || 'user')
       setLoading(false)
